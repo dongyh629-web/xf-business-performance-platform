@@ -6,7 +6,13 @@ import pandas as pd
 import streamlit as st
 
 from app import config as app_config
-from app.customer_health import NEW_CUSTOMER_START_DATE, PRIORITY_ORDER, analysis_cutoff, build_customer_health
+from app.customer_health import (
+    NEW_CUSTOMER_START_DATE,
+    PRIORITY_ORDER,
+    analysis_cutoff,
+    build_customer_health,
+    get_customer_status_style,
+)
 from app.data import apply_date_basis, load_processed_data
 from app.ui import money, percent, show_code_warning, show_context_summary, show_filters
 
@@ -28,6 +34,18 @@ def _format_money(value) -> str:
     if pd.isna(value):
         return ""
     return money(float(value))
+
+
+def _format_days(value) -> str:
+    if pd.isna(value):
+        return "暂无稳定周期"
+    return f"{float(value):.0f} 天"
+
+
+def _format_ratio(value) -> str:
+    if pd.isna(value):
+        return "暂无基准"
+    return f"{float(value):.1f}x"
 
 
 def _csv_bytes(df: pd.DataFrame) -> bytes:
@@ -70,10 +88,27 @@ def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
     for column in ["最近4周销售额", "前4周销售额", "历史累计销售额", "最近一次订单金额", "历史平均订单金额"]:
         if column in display.columns:
             display[column] = display[column].map(_format_money)
+    for column in ["Typical Order Interval Days"]:
+        if column in display.columns:
+            display[column] = display[column].map(_format_days)
+    for column in ["Interval Ratio"]:
+        if column in display.columns:
+            display[column] = display[column].map(_format_ratio)
     for column in ["金额变化率", "频次变化率"]:
         if column in display.columns:
             display[column] = display[column].map(_format_percent)
     return display
+
+
+def _style_status_columns(df: pd.DataFrame):
+    status_columns = [
+        column
+        for column in ["风险等级", "Health Status", "Trend Direction", "Improvement Type", "Interval Status"]
+        if column in df.columns
+    ]
+    if not status_columns:
+        return df
+    return df.style.map(get_customer_status_style, subset=status_columns)
 
 
 def _display_new_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -87,13 +122,21 @@ def _display_new_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _impact_text(row: pd.Series) -> str:
-    if pd.notna(row.get("未下单天数")):
-        return f"{int(row['未下单天数'])} 天未下单"
+    if pd.notna(row.get("Interval Ratio")):
+        return f"偏离正常节奏 {_format_ratio(row.get('Interval Ratio'))}"
     if pd.notna(row.get("金额变化率")):
         return f"最近4周采购下降 {abs(float(row['金额变化率'])):.1%}"
     if pd.notna(row.get("频次变化率")):
         return f"最近8周下单频次下降 {abs(float(row['频次变化率'])):.1%}"
     return str(row.get("主要风险原因", ""))
+
+
+def _priority_text(priority: str) -> str:
+    if priority == "高优先级":
+        return ":red[**高优先级**]"
+    if priority == "中优先级":
+        return ":orange[**中优先级**]"
+    return ":gray[**低优先级**]"
 
 
 st.set_page_config(page_title="客户健康", layout="wide")
@@ -142,15 +185,44 @@ if result.follow_up.empty:
 else:
     for _, row in result.follow_up.iterrows():
         with st.container(border=True):
-            cols = st.columns([1.1, 2.2, 1.2, 1.2])
-            cols[0].markdown(f"**{row['风险等级']}**")
+            cols = st.columns([1.1, 2.1, 1.3, 1.2, 1.1])
+            cols[0].markdown(_priority_text(row["风险等级"]))
             cols[1].markdown(f"**{row.get('Customer Name', '')}**")
             cols[1].caption(str(row.get("Customer Code", "")))
             cols[2].caption("主要风险")
             cols[2].markdown(_impact_text(row))
-            cols[3].caption("最近下单")
-            cols[3].markdown(_format_date(row.get("最近下单日期")))
-            st.caption(f"风险类型：{row.get('风险类型', '')} | 历史销售额：{_format_money(row.get('历史累计销售额'))}")
+            cols[3].caption("当前未下单")
+            cols[3].markdown(f"{int(row.get('Days Since Last Order', 0) or 0)} 天")
+            cols[4].caption("正常周期")
+            cols[4].markdown(_format_days(row.get("Typical Order Interval Days")))
+            st.caption(
+                f"最近下单：{_format_date(row.get('最近下单日期'))} | "
+                f"偏离倍数：{_format_ratio(row.get('Interval Ratio'))} | "
+                f"风险类型：{row.get('风险类型', '')} | "
+                f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
+            )
+
+st.subheader("近期改善客户")
+st.caption("Improving Customers")
+improving = result.improving_customers.head(10).copy()
+if improving.empty:
+    st.info("当前没有识别到明显改善或恢复正常的客户。")
+else:
+    for _, row in improving.iterrows():
+        with st.container(border=True):
+            cols = st.columns([2.2, 1.2, 1.4, 1.4, 1.2])
+            cols[0].markdown(f"**{row.get('Customer Name', '')}**")
+            cols[0].caption(str(row.get("Customer Code", "")))
+            cols[1].markdown(f":green[**{row.get('Improvement Type', '')}**]")
+            cols[2].caption("金额变化")
+            cols[2].markdown(f"{_format_money(row.get('前4周销售额'))} → {_format_money(row.get('最近4周销售额'))}")
+            if pd.notna(row.get("金额增长率")):
+                cols[2].caption(f"+{float(row['金额增长率']):.1%}")
+            cols[3].caption("订单频次")
+            cols[3].markdown(f"{int(row.get('前8周订单数', 0))} 单 → {int(row.get('最近8周订单数', 0))} 单")
+            cols[4].caption("当前节奏")
+            cols[4].markdown(_format_ratio(row.get("Interval Ratio")))
+            st.caption(f"历史销售额：{_format_money(row.get('历史累计销售额'))}")
 
 st.subheader("客户健康 KPI")
 active = result.active_metrics
@@ -187,6 +259,7 @@ else:
 
     sort_options = {
         "风险等级": ("_priority_order", True),
+        "偏离正常节奏": ("Interval Ratio", False),
         "未下单天数": ("未下单天数", False),
         "金额下降": ("金额变化率", True),
         "频次下降": ("频次变化率", True),
@@ -205,7 +278,7 @@ else:
     sort_column, ascending = sort_options[sort_label]
     filtered_risk = filtered_risk.sort_values(sort_column, ascending=ascending).drop(columns=["_priority_order"], errors="ignore")
 
-    st.dataframe(_display_risk_table(filtered_risk), width="stretch", hide_index=True)
+    st.dataframe(_style_status_columns(_display_risk_table(filtered_risk)), width="stretch", hide_index=True)
     st.download_button(
         "下载风险客户名单 / Download Customer Risk List",
         _csv_bytes(filtered_risk),
