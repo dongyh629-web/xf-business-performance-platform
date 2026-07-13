@@ -11,6 +11,7 @@ from app.config import (
     CUSTOMER_CODE_CANDIDATES,
     DATE_BASIS_OPTIONS,
     FALLBACK_SALES_DATE,
+    GROSS_PROFIT_CANDIDATES,
     LINE_ID_CANDIDATES,
     METHODOLOGY_VERSION,
     OPTIONAL_STANDARD_COLUMNS,
@@ -88,6 +89,7 @@ def _prepare_base(raw: pd.DataFrame) -> pd.DataFrame:
         for col in [
             _first_existing(raw.columns, CUSTOMER_CODE_CANDIDATES),
             _first_existing(raw.columns, PRODUCT_CODE_CANDIDATES),
+            _first_existing(raw.columns, GROSS_PROFIT_CANDIDATES),
             _first_existing(raw.columns, LINE_ID_CANDIDATES),
             _first_existing(raw.columns, UNIT_CANDIDATES),
         ]
@@ -104,8 +106,13 @@ def _prepare_base(raw: pd.DataFrame) -> pd.DataFrame:
 
     df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce")
     df["Sub Total"] = pd.to_numeric(df["Sub Total"], errors="coerce")
+    gross_profit_col = _first_existing(df.columns, GROSS_PROFIT_CANDIDATES)
+    if gross_profit_col:
+        df[gross_profit_col] = pd.to_numeric(df[gross_profit_col], errors="coerce")
 
-    text_columns = ["Order No.", "Warehouse", "Customer", "Customer Type", "Product", "Product Group", "Status"] + optional_columns
+    numeric_optional_columns = [col for col in [_first_existing(df.columns, GROSS_PROFIT_CANDIDATES)] if col]
+    text_optional_columns = [col for col in optional_columns if col not in numeric_optional_columns]
+    text_columns = ["Order No.", "Warehouse", "Customer", "Customer Type", "Product", "Product Group", "Status"] + text_optional_columns
     for col in text_columns:
         df[col] = df[col].astype("string").str.replace("\n", " ", regex=False).str.strip()
 
@@ -226,6 +233,7 @@ def clean_sales_data(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int | f
     product_code_col = _first_existing(df.columns, PRODUCT_CODE_CANDIDATES)
     line_id_col = _first_existing(df.columns, LINE_ID_CANDIDATES)
     unit_col = _first_existing(df.columns, UNIT_CANDIDATES)
+    gross_profit_col = _first_existing(df.columns, GROSS_PROFIT_CANDIDATES)
 
     totals_rows = df["Status"].str.lower().eq("totals").fillna(False) | df["Order No."].str.lower().eq("totals").fillna(False)
     blank_key_rows = df["Order No."].isna() | df["Customer"].isna() | df["Product"].isna()
@@ -258,6 +266,7 @@ def clean_sales_data(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int | f
     clean["Year"] = pd.NA
     clean["Month"] = pd.NA
     clean["Sales Amount"] = clean["Sub Total"].fillna(0)
+    clean["Gross Profit"] = clean[gross_profit_col] if gross_profit_col else pd.NA
     clean["Quantity"] = clean["Quantity"]
     clean["Customer Name"] = clean["Customer"]
     clean["Product Name"] = clean["Product"]
@@ -325,6 +334,7 @@ def clean_sales_data(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int | f
         "产品代码字段": product_code_col or "源文件缺少",
         "行唯一标识字段": line_id_col or "源文件缺少",
         "数量单位字段": unit_col or "源文件缺少",
+        "毛利字段": gross_profit_col or "源文件缺少",
         "数量单位检查": "源文件缺少数量单位字段，首页不展示公司级总销量。" if not unit_col else f"检测到数量单位字段：{unit_col}",
         "主业绩日期": selected_date,
         "主业绩日期说明": date_quality["日期口径说明"],

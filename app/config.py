@@ -90,6 +90,14 @@ PRODUCT_CODE_CANDIDATES = [
     "ItemCode",
 ]
 
+GROSS_PROFIT_CANDIDATES = [
+    "Gross Profit",
+    "GrossProfit",
+    "Profit",
+    "Gross Margin",
+    "Margin",
+]
+
 LINE_ID_CANDIDATES = [
     "Line ID",
     "LineID",

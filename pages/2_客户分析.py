@@ -12,6 +12,18 @@ from app.ui import bar_chart, date_text, days, donut_chart, line_chart, metric_c
 
 DATA_PATH = Path("data/processed/latest_sales.parquet")
 
+
+def money_or_na(value) -> str:
+    if pd.isna(value):
+        return "暂无毛利字段"
+    return money(float(value))
+
+
+def percent_or_na(value) -> str:
+    if pd.isna(value):
+        return "暂无可比数据"
+    return f"{float(value):.1%}"
+
 st.set_page_config(page_title="客户分析", layout="wide")
 st.title("客户分析")
 st.caption("Customer Intelligence")
@@ -81,22 +93,28 @@ with right:
     st.dataframe(abc, width="stretch", hide_index=True)
 
 st.subheader("客户汇总表")
-st.caption("Customer Summary Table。表格筛选仅影响本表，不改变页面顶部 KPI、ABC 分布或全局筛选。")
+st.caption("Customer Summary Table。表格筛选仅影响本表，不改变页面顶部 KPI、ABC 分布或全局筛选。同比增长按当前筛选范围内最近年份与前一年销售额计算；月度趋势基于当前日期口径。")
 
 if customer_summary.empty:
     st.info("当前筛选范围内没有客户汇总数据。")
 else:
     table = customer_summary.copy()
+    has_gross_profit = "Gross Profit" in table.columns and table["Gross Profit"].notna().any()
+    if not has_gross_profit:
+        st.caption("当前源文件未识别到 Gross Profit / 毛利字段，表格中毛利显示为“暂无毛利字段”。")
     display = pd.DataFrame(
         {
-            "客户代码": table["Customer Code"].fillna(table["Customer Key"]),
             "客户名称": table["Customer Name"].fillna(""),
-            "客户类型": table["Customer Type"].fillna("未分类"),
-            "ABC 等级": table["ABC Class"],
+            "客户代码": table["Customer Code"].fillna(table["Customer Key"]),
             "销售额": table["Total Sales"],
-            "销售贡献率": table["Sales Contribution"],
+            "毛利": table["Gross Profit"] if "Gross Profit" in table.columns else pd.NA,
             "订单数": table["Order Count"],
             "平均订单金额": table["Average Order Value"],
+            "ABC 等级": table["ABC Class"],
+            "同比增长": table["YoY Growth"] if "YoY Growth" in table.columns else pd.NA,
+            "月度趋势": table["Monthly Trend"] if "Monthly Trend" in table.columns else [[] for _ in range(len(table))],
+            "客户类型": table["Customer Type"].fillna("未分类"),
+            "销售贡献率": table["Sales Contribution"],
             "最近下单日期": table["Last Order Date"].map(date_text),
             "平均订单间隔": table["Average Order Gap Days"].map(days),
             "月均订单数": table["Orders per Month"],
@@ -117,6 +135,8 @@ else:
 
     sort_options = {
         "销售额（高到低）": ("销售额", False),
+        "毛利（高到低）": ("毛利", False),
+        "同比增长（高到低）": ("同比增长", False),
         "销售贡献率（高到低）": ("销售贡献率", False),
         "订单数（高到低）": ("订单数", False),
         "平均订单金额（高到低）": ("平均订单金额", False),
@@ -138,7 +158,11 @@ else:
     filtered_table = filtered_table[filtered_table["客户类型"].isin(selected_types)]
 
     sort_col, ascending = sort_options[sort_label]
-    filtered_table = filtered_table.sort_values(sort_col, ascending=ascending)
+    if sort_col in ["毛利", "同比增长"]:
+        filtered_table = filtered_table.assign(_sort_value=pd.to_numeric(filtered_table[sort_col], errors="coerce").fillna(float("-inf")))
+        filtered_table = filtered_table.sort_values("_sort_value", ascending=ascending).drop(columns=["_sort_value"])
+    else:
+        filtered_table = filtered_table.sort_values(sort_col, ascending=ascending)
 
     result_customers = len(filtered_table)
     result_sales = float(filtered_table["销售额"].sum()) if not filtered_table.empty else 0.0
@@ -154,26 +178,33 @@ else:
     else:
         formatted_table = filtered_table.copy()
         formatted_table["销售额"] = formatted_table["销售额"].map(money)
+        formatted_table["毛利"] = formatted_table["毛利"].map(money_or_na)
+        formatted_table["同比增长"] = formatted_table["同比增长"].map(percent_or_na)
         formatted_table["销售贡献率"] = formatted_table["销售贡献率"].map(percent)
         formatted_table["平均订单金额"] = formatted_table["平均订单金额"].map(money)
         formatted_table["月均订单数"] = formatted_table["月均订单数"].map(lambda v: f"{v:.1f}")
+        download_table = filtered_table.copy()
+        download_table["月度趋势"] = download_table["月度趋势"].map(lambda values: ", ".join(f"{v:.2f}" for v in values) if isinstance(values, list) else "")
         st.download_button(
             "下载当前筛选客户汇总 CSV",
-            filtered_table.to_csv(index=False).encode("utf-8-sig"),
+            download_table.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"customer_summary_{date.today():%Y%m%d}.csv",
             mime="text/csv",
         )
         st.dataframe(
             formatted_table[
                 [
-                    "客户代码",
                     "客户名称",
-                    "客户类型",
-                    "ABC 等级",
+                    "客户代码",
                     "销售额",
-                    "销售贡献率",
+                    "毛利",
                     "订单数",
                     "平均订单金额",
+                    "ABC 等级",
+                    "同比增长",
+                    "月度趋势",
+                    "客户类型",
+                    "销售贡献率",
                     "最近下单日期",
                     "平均订单间隔",
                     "月均订单数",
@@ -184,6 +215,9 @@ else:
             ],
             width="stretch",
             hide_index=True,
+            column_config={
+                "月度趋势": st.column_config.LineChartColumn("月度趋势", help="Monthly Trend：当前筛选范围内每月销售额变化。"),
+            },
         )
 
 st.subheader("单客户详情")

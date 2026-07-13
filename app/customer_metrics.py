@@ -39,6 +39,11 @@ def build_customer_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, in
 
     customer_key = "Customer Key" if "Customer Key" in df.columns else "Customer"
     product_key = "Product Key" if "Product Key" in df.columns else "Product"
+    months = sorted(df["Performance Month"].dropna().astype(str).unique().tolist()) if "Performance Month" in df.columns else []
+    years = sorted(pd.to_datetime(df["Performance Date"], errors="coerce").dropna().dt.year.unique().tolist())
+    current_year = int(years[-1]) if years else None
+    previous_year = current_year - 1 if current_year else None
+    has_gross_profit = "Gross Profit" in df.columns and df["Gross Profit"].notna().any()
 
     orders = (
         df.groupby([customer_key, "Order No."], dropna=False)
@@ -57,6 +62,7 @@ def build_customer_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, in
         customer_orders = orders[orders[customer_key].eq(key)].copy()
         order_count = int(customer_orders["Order No."].nunique())
         total = float(group["Sales Amount"].sum())
+        gross_profit = float(group["Gross Profit"].sum()) if has_gross_profit and group["Gross Profit"].notna().any() else pd.NA
         first_order = group["Performance Date"].min()
         last_order = group["Performance Date"].max()
         active_months = _covered_months(first_order, last_order)
@@ -73,6 +79,14 @@ def build_customer_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, in
 
         name = _latest_non_empty(group, "Customer Name")
         customer_type = _latest_non_empty(group, "Customer Type")
+        if current_year and previous_year:
+            current_year_sales = float(group.loc[group["Performance Date"].dt.year.eq(current_year), "Sales Amount"].sum())
+            previous_year_sales = float(group.loc[group["Performance Date"].dt.year.eq(previous_year), "Sales Amount"].sum())
+            yoy_growth = (current_year_sales - previous_year_sales) / previous_year_sales if previous_year_sales > 0 else pd.NA
+        else:
+            yoy_growth = pd.NA
+        monthly_sales = group.groupby("Performance Month", dropna=False)["Sales Amount"].sum() if months else pd.Series(dtype="float")
+        monthly_trend = [float(monthly_sales.get(month, 0.0)) for month in months]
 
         rows.append(
             {
@@ -84,7 +98,10 @@ def build_customer_summary(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, in
                 "Name Conflict": bool(name_conflict),
                 "Type Conflict": bool(type_conflict),
                 "Total Sales": total,
+                "Gross Profit": gross_profit,
                 "Sales Contribution": total / total_sales if total_sales > 0 else 0.0,
+                "YoY Growth": yoy_growth,
+                "Monthly Trend": monthly_trend,
                 "Order Count": order_count,
                 "Average Order Value": avg_order_value,
                 "First Order Date": first_order,
