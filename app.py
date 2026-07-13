@@ -6,7 +6,7 @@ import streamlit as st
 from app.config import DATA_PATH, PERSIST_UPLOADED_DATA
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, load_processed_data, monthly_sales, save_processed_data, top_entity_table, top_table
-from app.target_metrics import analyze_target_workbook
+from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook
 from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_filters
 
 
@@ -58,11 +58,17 @@ if uploaded is not None:
             st.session_state["show_data_uploader"] = False
         st.success(f"导入完成：已识别工作表 `{result.sheet_name}`")
     except ValueError as exc:
+        looks_like_target = False
+        try:
+            parse_xf_target_workbook(BytesIO(uploaded.getvalue()))
+            looks_like_target = True
+        except Exception:
+            looks_like_target = False
         try:
             target_analysis = analyze_target_workbook(BytesIO(uploaded.getvalue()))
         except Exception:
             target_analysis = None
-        if target_analysis and target_analysis.candidates:
+        if looks_like_target or (target_analysis and target_analysis.candidates):
             st.error("该文件看起来不像 Unleashed 销售明细，可能是目标表。请前往‘经营追踪’页面上传目标 Excel。")
         else:
             st.error(str(exc))

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
+import re
 from typing import Iterable
 
+from openpyxl import load_workbook
 import pandas as pd
+from openpyxl.utils.exceptions import InvalidFileException
 
 from app.config import REQUIRED_COLUMNS
 
@@ -96,6 +100,21 @@ class TargetWorkbookAnalysis:
     sheet_names: list[str]
 
 
+@dataclass(frozen=True)
+class XFTargetWorkbook:
+    amount_data: pd.DataFrame
+    case_data: pd.DataFrame
+    company_targets: pd.DataFrame
+    annual_targets: dict[int, float]
+    amount_sheet: str | None
+    case_sheet: str | None
+    target_year: int | None
+    product_group_count: int
+    company_annual_amount_target: float | None
+    company_annual_case_target: float | None
+    structure_label: str
+
+
 def _normalize_name(value: object) -> str:
     text = str(value).strip().lower()
     for token in [" ", "_", "-", ".", "/", "\\", "（", "）", "(", ")"]:
@@ -128,6 +147,239 @@ def parse_month(value: object) -> int | None:
     except ValueError:
         return None
     return month if 1 <= month <= 12 else None
+
+
+def _to_number(value: object) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip()
+    if not text or text in {"——", "-", "#DIV/0!", "#VALUE!", "#REF!", "#N/A"}:
+        return None
+    text = text.replace(",", "").replace("£", "").replace("%", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _year_from_text(*values: object) -> int | None:
+    for value in values:
+        if value is None:
+            continue
+        match = re.search(r"(20\d{2})", str(value))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _open_workbook(excel_file, data_only: bool = True):
+    try:
+        if isinstance(excel_file, (bytes, bytearray)):
+            return load_workbook(BytesIO(excel_file), data_only=data_only)
+        if hasattr(excel_file, "seek"):
+            excel_file.seek(0)
+        return load_workbook(excel_file, data_only=data_only)
+    except (InvalidFileException, OSError, ValueError) as exc:
+        raise ValueError("目标 Excel 无法读取，请确认文件是有效的 .xlsx 工作簿。") from exc
+
+
+def _filled_header_values(ws, row: int) -> dict[int, object]:
+    values: dict[int, object] = {}
+    current = None
+    for col in range(1, ws.max_column + 1):
+        value = ws.cell(row, col).value
+        if value is not None:
+            current = value
+        values[col] = current
+    return values
+
+
+def parse_xf_target_amount_sheet(excel_file, sheet_name: str = "2026销售目标金额") -> pd.DataFrame:
+    """Parse XF's fixed multi-header amount target template into a long table."""
+    wb = _open_workbook(excel_file, data_only=True)
+    if sheet_name not in wb.sheetnames:
+        raise ValueError(f"未找到金额目标工作表：{sheet_name}")
+    ws = wb[sheet_name]
+    month_headers = _filled_header_values(ws, 1)
+    target_year = _year_from_text(sheet_name, ws.cell(1, 2).value)
+
+    month_columns: dict[int, dict[str, int]] = {}
+    annual_plan_col = None
+    for col in range(1, ws.max_column + 1):
+        group_label = str(month_headers.get(col) or "").strip()
+        sub_label = ws.cell(3, col).value
+        month = parse_month(group_label)
+        if month:
+            if sub_label == 2025:
+                month_columns.setdefault(month, {})["previous"] = col
+            elif sub_label == 2026:
+                month_columns.setdefault(month, {})["target"] = col
+        if _normalize_name(group_label) == _normalize_name("2026计划"):
+            annual_plan_col = col
+
+    if not month_columns:
+        raise ValueError("金额目标工作表未识别到 1月-12月的 2025/2026 月度列。")
+
+    rows: list[dict[str, object]] = []
+    for row_idx in range(4, ws.max_row + 1):
+        first_col = ws.cell(row_idx, 1).value
+        product_group = ws.cell(row_idx, 2).value
+        is_total = str(first_col).strip().upper() in {"总计", "TOTAL"}
+        if is_total:
+            product_group_text = "公司整体"
+        elif product_group is None or str(product_group).strip() == "":
+            continue
+        else:
+            product_group_text = str(product_group).strip()
+
+        annual_original = _to_number(ws.cell(row_idx, annual_plan_col).value) if annual_plan_col else None
+        row_has_value = annual_original is not None
+        for month, cols in sorted(month_columns.items()):
+            previous = _to_number(ws.cell(row_idx, cols.get("previous", 0)).value) if cols.get("previous") else None
+            original = _to_number(ws.cell(row_idx, cols.get("target", 0)).value) if cols.get("target") else None
+            if previous is not None or original is not None:
+                row_has_value = True
+            rows.append(
+                {
+                    "Year": target_year,
+                    "Month": month,
+                    "Month Label": MONTH_LABELS[month],
+                    "Product Group": product_group_text,
+                    "Previous Year Actual": previous,
+                    "Original Target": original,
+                    "Revised Target": original,
+                    "Annual Original Target": annual_original,
+                    "Notes": "",
+                }
+            )
+        if not row_has_value and not is_total:
+            rows = rows[: -len(month_columns)]
+
+    df = pd.DataFrame.from_records(rows)
+    if df.empty:
+        raise ValueError("金额目标工作表未提取到有效目标数据。")
+    df["Year"] = df["Year"].fillna(target_year).astype("Int64")
+    return df
+
+
+def parse_xf_monthly_case_targets(excel_file, sheet_name: str = "月度箱数需求") -> pd.DataFrame:
+    """Parse XF's monthly case target sheet into a long table."""
+    wb = _open_workbook(excel_file, data_only=True)
+    if sheet_name not in wb.sheetnames:
+        raise ValueError(f"未找到数量目标工作表：{sheet_name}")
+    ws = wb[sheet_name]
+    target_year = _year_from_text(sheet_name, ws.cell(1, 1).value)
+
+    header_row = None
+    for row in range(1, min(ws.max_row, 12) + 1):
+        first_value = _normalize_name(ws.cell(row, 1).value or "")
+        if first_value in {_normalize_name("品类"), _normalize_name("Product Group")}:
+            header_row = row
+            break
+    if header_row is None:
+        raise ValueError("数量目标工作表未找到“品类 / Product Group”表头。")
+
+    month_cols: dict[int, int] = {}
+    annual_col = None
+    price_col = None
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(header_row, col).value
+        month = parse_month(header)
+        if month:
+            month_cols[month] = col
+        normalized = _normalize_name(header or "")
+        if "箱价" in str(header or "") or normalized in {"caseprice", "price"}:
+            price_col = col
+        if normalized in {_normalize_name("全年箱数"), _normalize_name("Annual Case Target")}:
+            annual_col = col
+
+    if len(month_cols) < 12:
+        raise ValueError("数量目标工作表未识别到完整的 1月-12月箱数列。")
+
+    rows: list[dict[str, object]] = []
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        product_group = ws.cell(row_idx, 1).value
+        if product_group is None or str(product_group).strip() == "":
+            continue
+        product_text = str(product_group).strip()
+        if product_text == "关键结果" or "全年约需要销售" in product_text:
+            break
+        if product_text.upper() == "TOTAL":
+            product_text = "公司整体"
+        annual_case = _to_number(ws.cell(row_idx, annual_col).value) if annual_col else None
+        case_price = _to_number(ws.cell(row_idx, price_col).value) if price_col else None
+        has_value = annual_case is not None
+        pending_rows = []
+        for month, col in sorted(month_cols.items()):
+            case_target = _to_number(ws.cell(row_idx, col).value)
+            if case_target is not None:
+                has_value = True
+            pending_rows.append(
+                {
+                    "Year": target_year,
+                    "Month": month,
+                    "Month Label": MONTH_LABELS[month],
+                    "Product Group": product_text,
+                    "Case Target": case_target,
+                    "Annual Case Target": annual_case,
+                    "Case Price": case_price,
+                }
+            )
+        if has_value:
+            rows.extend(pending_rows)
+
+    df = pd.DataFrame.from_records(rows)
+    if df.empty:
+        raise ValueError("数量目标工作表未提取到有效目标数据。")
+    df["Year"] = df["Year"].fillna(target_year).astype("Int64")
+    return df
+
+
+def parse_xf_target_workbook(excel_file) -> XFTargetWorkbook:
+    amount_sheet = "2026销售目标金额"
+    case_sheet = "月度箱数需求"
+    amount_df = parse_xf_target_amount_sheet(excel_file, amount_sheet)
+    case_df = parse_xf_monthly_case_targets(excel_file, case_sheet)
+
+    year_values = amount_df["Year"].dropna().astype(int).unique().tolist()
+    target_year = int(year_values[0]) if year_values else None
+    company_targets = (
+        amount_df[amount_df["Product Group"].eq("公司整体")]
+        .copy()
+        .rename(columns={"Previous Year Actual": "Previous Year Target Template Actual"})
+    )
+    if company_targets.empty:
+        raise ValueError("金额目标工作表未识别到“总计”公司整体目标行。")
+    company_targets = company_targets[
+        ["Year", "Month", "Month Label", "Original Target", "Revised Target", "Notes"]
+    ].copy()
+    annual_targets: dict[int, float] = {}
+    for year, group in company_targets.groupby("Year"):
+        annual_targets[int(year)] = float(pd.to_numeric(group["Original Target"], errors="coerce").fillna(0).sum())
+
+    product_groups = amount_df.loc[~amount_df["Product Group"].eq("公司整体"), "Product Group"].dropna().unique().tolist()
+    company_annual_amount = annual_targets.get(target_year) if target_year is not None else None
+    company_case_rows = case_df[case_df["Product Group"].eq("公司整体")]
+    company_annual_case = None
+    if not company_case_rows.empty:
+        company_annual_case = _to_number(company_case_rows["Annual Case Target"].dropna().iloc[0]) if not company_case_rows["Annual Case Target"].dropna().empty else None
+
+    return XFTargetWorkbook(
+        amount_data=amount_df,
+        case_data=case_df,
+        company_targets=company_targets,
+        annual_targets=annual_targets,
+        amount_sheet=amount_sheet,
+        case_sheet=case_sheet,
+        target_year=target_year,
+        product_group_count=len(product_groups),
+        company_annual_amount_target=company_annual_amount,
+        company_annual_case_target=company_annual_case,
+        structure_label=f"{amount_sheet} + {case_sheet}",
+    )
+
 
 
 def _month_column_number(column: object) -> int | None:

@@ -185,6 +185,33 @@ def _progress(value: float | None) -> float:
     return max(0.0, min(float(value), 1.0))
 
 
+def _session_targets_for_anchor(df: pd.DataFrame) -> tuple[float, float, str | None]:
+    targets = None
+    try:
+        import streamlit as st
+
+        targets = st.session_state.get("target_data")
+    except Exception:
+        targets = None
+    if targets is None or targets.empty or "Performance Date" not in df.columns:
+        return 0.0, 0.0, None
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dropna()
+    if dates.empty:
+        return 0.0, 0.0, None
+    anchor = dates.max()
+    year_targets = targets[targets["Year"].astype("Int64").eq(int(anchor.year))].copy()
+    if year_targets.empty:
+        return 0.0, 0.0, None
+    revised = pd.to_numeric(year_targets["Revised Target"], errors="coerce").fillna(
+        pd.to_numeric(year_targets["Original Target"], errors="coerce")
+    )
+    year_targets = year_targets.assign(_revised=revised.fillna(0.0))
+    month_rows = year_targets[year_targets["Month"].astype(int).eq(int(anchor.month))]
+    monthly_target = float(month_rows["_revised"].iloc[-1]) if not month_rows.empty else 0.0
+    annual_target = float(year_targets["_revised"].sum())
+    return monthly_target, annual_target, "经营追踪目标"
+
+
 def business_status(metrics: BusinessDashboardMetrics) -> tuple[str, str]:
     if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
         return "尚未设置目标", "info"
@@ -241,24 +268,34 @@ def _scope_text(df: pd.DataFrame) -> str:
 def render_business_dashboard(df: pd.DataFrame) -> None:
     import streamlit as st
 
+    session_monthly_target, session_annual_target, target_source = _session_targets_for_anchor(df)
     with st.sidebar:
         with st.expander("经营目标", expanded=True):
-            monthly_target = st.number_input(
-                "月度目标",
-                min_value=0.0,
-                value=float(st.session_state.get("home_monthly_target", 0.0)),
-                step=10000.0,
-                format="%.0f",
-                key="home_monthly_target",
-            )
-            annual_target = st.number_input(
-                "年度目标（自然年）",
-                min_value=0.0,
-                value=float(st.session_state.get("home_annual_target", 0.0)),
-                step=50000.0,
-                format="%.0f",
-                key="home_annual_target",
-            )
+            if target_source:
+                monthly_target = session_monthly_target
+                annual_target = session_annual_target
+                st.caption(f"当前使用：{target_source}")
+                st.caption(f"月度目标：{money(monthly_target)}")
+                st.caption(f"年度目标：{money(annual_target)}")
+                st.page_link("pages/4_经营追踪.py", label="前往经营追踪调整目标")
+            else:
+                monthly_target = st.number_input(
+                    "月度目标",
+                    min_value=0.0,
+                    value=float(st.session_state.get("home_monthly_target", 0.0)),
+                    step=10000.0,
+                    format="%.0f",
+                    key="home_monthly_target",
+                )
+                annual_target = st.number_input(
+                    "年度目标（自然年）",
+                    min_value=0.0,
+                    value=float(st.session_state.get("home_annual_target", 0.0)),
+                    step=50000.0,
+                    format="%.0f",
+                    key="home_annual_target",
+                )
+                st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
             st.caption("年度范围为1月1日至12月31日。")
 
     metrics = calculate_business_dashboard_metrics(df, monthly_target, annual_target)
@@ -284,6 +321,8 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
         st.warning(status_message)
     else:
         st.info(status_message)
+        if metrics.monthly_target <= 0:
+            st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
 
     st.markdown("#### 本月核心指标")
     month_cols = st.columns(4)

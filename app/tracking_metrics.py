@@ -29,6 +29,13 @@ def _safe_ratio(numerator: float, denominator: float) -> float | None:
     return numerator / denominator
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
+        return default
+    return float(number)
+
+
 def analysis_date(df: pd.DataFrame) -> pd.Timestamp | None:
     if "Performance Date" not in df.columns:
         return None
@@ -100,8 +107,8 @@ def _complete_targets_for_year(targets: pd.DataFrame, target_year: int) -> pd.Da
             notes = ""
         else:
             row = month_rows.iloc[-1]
-            original = float(row.get("Original Target", 0.0) or 0.0)
-            revised = float(row.get("Revised Target", original) or 0.0)
+            original = _safe_float(row.get("Original Target", 0.0))
+            revised = _safe_float(row.get("Revised Target", original), original)
             notes = "" if pd.isna(row.get("Notes", "")) else str(row.get("Notes", ""))
         records.append(
             {
@@ -178,6 +185,76 @@ def build_monthly_tracking_table(
         average_shortfall_allocation=average_allocation,
     )
     return table, summary
+
+
+def build_product_group_amount_tracking(
+    sales_df: pd.DataFrame,
+    amount_targets: pd.DataFrame,
+    target_year: int,
+) -> pd.DataFrame:
+    anchor = analysis_date(sales_df)
+    if anchor is None or amount_targets is None or amount_targets.empty:
+        return pd.DataFrame()
+    if "Product Group" not in sales_df.columns:
+        return pd.DataFrame()
+
+    target_rows = amount_targets[
+        amount_targets["Year"].astype("Int64").eq(target_year)
+        & ~amount_targets["Product Group"].astype(str).eq("公司整体")
+    ].copy()
+    if target_rows.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, target_row in target_rows.iterrows():
+        product_group = str(target_row["Product Group"])
+        month = int(target_row["Month"])
+        product_sales = sales_df[sales_df["Product Group"].astype(str).eq(product_group)]
+        actual = _month_actual(product_sales, target_year, month, anchor)
+        previous = _previous_year_month_sales(product_sales, target_year, month, anchor)
+        original = _safe_float(target_row.get("Original Target", 0.0))
+        revised = _safe_float(target_row.get("Revised Target", original), original)
+        rows.append(
+            {
+                "Product Group": product_group,
+                "Month": month,
+                "Month Label": MONTH_LABELS[month],
+                "Original Amount Target": original,
+                "Revised Amount Target": revised,
+                "Actual Sales Amount": actual,
+                "Amount Completion Rate": _safe_ratio(actual, revised),
+                "Amount Gap": actual - revised,
+                "Previous Year Actual": previous,
+                "YoY": None if previous is None else _safe_ratio(actual - previous, previous),
+            }
+        )
+    return pd.DataFrame.from_records(rows).sort_values(["Product Group", "Month"]).reset_index(drop=True)
+
+
+def build_product_group_case_tracking(case_targets: pd.DataFrame, target_year: int) -> pd.DataFrame:
+    if case_targets is None or case_targets.empty:
+        return pd.DataFrame()
+    target_rows = case_targets[
+        case_targets["Year"].astype("Int64").eq(target_year)
+        & ~case_targets["Product Group"].astype(str).eq("公司整体")
+    ].copy()
+    if target_rows.empty:
+        return pd.DataFrame()
+    target_rows = target_rows.sort_values(["Product Group", "Month"]).reset_index(drop=True)
+    target_rows["Actual Cases"] = pd.NA
+    target_rows["Case Completion Rate"] = pd.NA
+    target_rows["Case Gap"] = pd.NA
+    return target_rows[
+        [
+            "Product Group",
+            "Month",
+            "Month Label",
+            "Case Target",
+            "Actual Cases",
+            "Case Completion Rate",
+            "Case Gap",
+        ]
+    ]
 
 
 def _annual_comparable_sales(sales_df: pd.DataFrame, target_year: int, anchor: pd.Timestamp) -> float:
