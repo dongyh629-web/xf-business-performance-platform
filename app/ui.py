@@ -4,9 +4,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import date, datetime
+from datetime import date
 
-from app.config import DATA_PATH, DATE_BASIS_DESCRIPTIONS, DATE_BASIS_LABELS, DATE_BASIS_OPTIONS
+from app.config import DATE_BASIS_DESCRIPTIONS, DATE_BASIS_LABELS, DATE_BASIS_OPTIONS
 from app.data import apply_date_basis
 
 
@@ -60,33 +60,8 @@ def _reset_filter_state(key_prefix: str, min_date, max_date) -> None:
 
 
 def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
-    completed_range = _first_valid_date(df, "Completed Date")
-    data_range = completed_range or _first_valid_date(df, "Order Date") or _first_valid_date(df, "Required Date")
-    range_text = f"{data_range[0]} 至 {data_range[1]}" if data_range else "无有效日期"
-    current_file = st.session_state.get("current_file_name")
-    data_source = st.session_state.get("data_source")
-    last_updated = st.session_state.get("data_last_updated")
-    if not last_updated and DATA_PATH.exists():
-        last_updated = datetime.fromtimestamp(DATA_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-    if data_source == "uploaded" and current_file:
-        source_text = "来源：latest_sales.parquet"
-        data_label = "已加载"
-    elif data_source == "persistent" or data_source == "local_processed" or not current_file:
-        source_text = "来源：latest_sales.parquet"
-        data_label = "已加载"
-    else:
-        source_text = "当前暂无数据，请上传 Unleashed Excel 文件。"
-        data_label = "暂无数据"
-
     with st.sidebar:
-        st.markdown("### 数据状态")
-        st.caption(f"当前数据：{data_label}")
-        st.caption(source_text)
-        if last_updated:
-            st.caption(f"最后更新时间：{last_updated}")
-        st.caption(f"数据日期范围：{range_text}")
-
-        st.markdown("### 日期")
+        st.markdown("### Date Basis")
         current_basis = st.session_state.get("date_basis", "Completed Date")
         if current_basis not in DATE_BASIS_OPTIONS:
             current_basis = "Completed Date"
@@ -110,6 +85,7 @@ def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
     product_group_values = basis_df["Product Group"].fillna("未分类").astype(str)
 
     with st.sidebar:
+        st.markdown("### 筛选")
         if pd.notna(min_date) and pd.notna(max_date):
             selected_range = st.date_input(
                 "日期范围",
@@ -123,13 +99,14 @@ def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
         customer_types = sorted(customer_type_values.unique().tolist())
         product_groups = sorted(product_group_values.unique().tolist())
 
-        st.markdown("### 客户")
-        all_customer_types = st.checkbox("全部客户类型", value=True, key=f"{key_prefix}_all_customer_types")
-        if all_customer_types:
-            selected_customer_types = customer_types
-            st.caption("客户类型：全部")
-        else:
-            with st.expander("选择客户类型", expanded=True):
+        customer_expanded = not st.session_state.get(f"{key_prefix}_all_customer_types", True)
+        customer_title = "客户类型：已筛选" if customer_expanded else "客户类型：全部"
+        with st.expander(customer_title, expanded=customer_expanded):
+            all_customer_types = st.checkbox("全部客户类型", value=True, key=f"{key_prefix}_all_customer_types")
+            if all_customer_types:
+                selected_customer_types = customer_types
+                st.caption("当前选择全部客户类型")
+            else:
                 selected_customer_types = st.multiselect(
                     "客户类型",
                     customer_types,
@@ -138,13 +115,14 @@ def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
                 )
                 st.caption(f"已选 {len(selected_customer_types)} 项")
 
-        st.markdown("### 产品")
-        all_product_groups = st.checkbox("全部产品组", value=True, key=f"{key_prefix}_all_product_groups")
-        if all_product_groups:
-            selected_product_groups = product_groups
-            st.caption("产品组：全部")
-        else:
-            with st.expander("选择产品组", expanded=True):
+        product_expanded = not st.session_state.get(f"{key_prefix}_all_product_groups", True)
+        product_title = "产品组：已筛选" if product_expanded else "产品组：全部"
+        with st.expander(product_title, expanded=product_expanded):
+            all_product_groups = st.checkbox("全部产品组", value=True, key=f"{key_prefix}_all_product_groups")
+            if all_product_groups:
+                selected_product_groups = product_groups
+                st.caption("当前选择全部产品组")
+            else:
                 selected_product_groups = st.multiselect(
                     "产品组",
                     product_groups,

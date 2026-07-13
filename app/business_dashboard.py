@@ -5,6 +5,8 @@ from datetime import date
 
 import pandas as pd
 
+from app.config import DATE_BASIS_LABELS
+
 
 def money(value: float) -> str:
     return f"£{value:,.0f}"
@@ -15,6 +17,7 @@ def percent(value: float) -> str:
 
 
 FISCAL_YEAR_START_MONTH = 4
+PACE_NORMAL_BAND = 0.05
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class BusinessDashboardMetrics:
     remaining_workdays: int
     workday_progress: float | None
     pace_ratio: float | None
+    pace_gap: float | None
     monthly_remaining_target: float
     annual_remaining_target: float
     required_daily_sales: float | None
@@ -90,6 +94,7 @@ def calculate_business_dashboard_metrics(
             remaining_workdays=0,
             workday_progress=None,
             pace_ratio=None,
+            pace_gap=None,
             monthly_remaining_target=max(float(monthly_target), 0.0),
             annual_remaining_target=max(float(annual_target), 0.0),
             required_daily_sales=None,
@@ -124,6 +129,7 @@ def calculate_business_dashboard_metrics(
     annual_completion = _safe_ratio(annual_sales, float(annual_target))
     workday_progress = _safe_ratio(float(elapsed_workdays), float(total_workdays))
     pace_ratio = _safe_ratio(monthly_completion or 0.0, workday_progress or 0.0) if monthly_completion is not None else None
+    pace_gap = monthly_completion - workday_progress if monthly_completion is not None and workday_progress is not None else None
     monthly_remaining = max(float(monthly_target) - monthly_sales, 0.0)
 
     return BusinessDashboardMetrics(
@@ -146,6 +152,7 @@ def calculate_business_dashboard_metrics(
         remaining_workdays=remaining_workdays,
         workday_progress=workday_progress,
         pace_ratio=pace_ratio,
+        pace_gap=pace_gap,
         monthly_remaining_target=monthly_remaining,
         annual_remaining_target=max(float(annual_target) - annual_sales, 0.0),
         required_daily_sales=_safe_ratio(monthly_remaining, float(remaining_workdays)),
@@ -160,36 +167,97 @@ def _format_pace(value: float | None) -> str:
     return "无基准" if value is None else f"{value:.2f}x"
 
 
+def _format_signed_points(value: float | None) -> str:
+    if value is None:
+        return "无基准"
+    return f"{value * 100:+.1f} 个百分点"
+
+
+def _format_abs_points(value: float) -> str:
+    return f"{abs(value) * 100:.1f} 个百分点"
+
+
 def _progress(value: float | None) -> float:
     if value is None:
         return 0.0
     return max(0.0, min(float(value), 1.0))
 
 
+def business_status(metrics: BusinessDashboardMetrics) -> tuple[str, str]:
+    if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
+        return "尚未设置目标", "info"
+    if metrics.monthly_completion >= 1:
+        return "领先目标节奏", "success"
+    if metrics.pace_gap >= PACE_NORMAL_BAND:
+        return "领先目标节奏", "success"
+    if metrics.pace_gap >= -PACE_NORMAL_BAND:
+        return "基本符合目标节奏", "info"
+    return "落后目标节奏", "warning"
+
+
+def generate_business_summary(metrics: BusinessDashboardMetrics) -> str:
+    if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
+        return "请先设置月度目标，以查看完成率和 Pace。"
+
+    if metrics.monthly_completion >= 1:
+        over_target = max(metrics.monthly_sales - metrics.monthly_target, 0.0)
+        return f"本月目标已完成，目前超目标 {money(over_target)}。"
+
+    if metrics.pace_gap < -PACE_NORMAL_BAND:
+        required = money(metrics.required_daily_sales or 0.0)
+        return f"当前销售进度落后工作日进度 {_format_abs_points(metrics.pace_gap)}，剩余工作日需日均销售 {required} 才能完成目标。"
+
+    if metrics.monthly_yoy is None:
+        if metrics.pace_gap >= PACE_NORMAL_BAND:
+            return f"本月销售进度领先工作日进度 {_format_abs_points(metrics.pace_gap)}，同比暂无可比基准。"
+        return f"本月销售完成 {_format_percent(metrics.monthly_completion)}，与工作日进度基本一致，同比暂无可比基准。"
+
+    if metrics.pace_gap >= PACE_NORMAL_BAND and metrics.monthly_yoy >= 0:
+        return f"本月销售进度领先工作日进度 {_format_abs_points(metrics.pace_gap)}，同比增加 {_format_percent(metrics.monthly_yoy)}，当前经营节奏良好。"
+
+    if metrics.pace_gap >= PACE_NORMAL_BAND and metrics.monthly_yoy < 0:
+        return f"本月销售进度领先工作日进度 {_format_abs_points(metrics.pace_gap)}，但同比下降 {_format_percent(abs(metrics.monthly_yoy))}，建议关注去年同期订单基数和大客户采购节奏。"
+
+    if metrics.monthly_yoy >= 0:
+        return f"本月销售完成 {_format_percent(metrics.monthly_completion)}，工作日进度基本匹配，同比增加 {_format_percent(metrics.monthly_yoy)}。"
+
+    return f"本月销售完成 {_format_percent(metrics.monthly_completion)}，工作日进度基本匹配，同比下降 {_format_percent(abs(metrics.monthly_yoy))}。"
+
+
+def _scope_text(df: pd.DataFrame) -> str:
+    customer_types = df.attrs.get("customer_types", [])
+    product_groups = df.attrs.get("product_groups", [])
+    all_customer_count = df.attrs.get("all_customer_type_count")
+    all_product_count = df.attrs.get("all_product_group_count")
+    customer_filtered = all_customer_count is not None and len(customer_types) != all_customer_count
+    product_filtered = all_product_count is not None and len(product_groups) != all_product_count
+    if customer_filtered or product_filtered:
+        return "当前为筛选范围内经营表现"
+    return "当前为全部可见数据经营表现"
+
+
 def render_business_dashboard(df: pd.DataFrame) -> None:
     import streamlit as st
 
-    st.subheader("经营驾驶舱")
-
-    target_cols = st.columns(2)
-    with target_cols[0]:
-        monthly_target = st.number_input(
-            "月度目标",
-            min_value=0.0,
-            value=float(st.session_state.get("home_monthly_target", 100000.0)),
-            step=10000.0,
-            format="%.0f",
-            key="home_monthly_target",
-        )
-    with target_cols[1]:
-        annual_target = st.number_input(
-            "年度目标（财年，4月开始）",
-            min_value=0.0,
-            value=float(st.session_state.get("home_annual_target", 1200000.0)),
-            step=50000.0,
-            format="%.0f",
-            key="home_annual_target",
-        )
+    with st.sidebar:
+        with st.expander("经营目标", expanded=True):
+            monthly_target = st.number_input(
+                "月度目标",
+                min_value=0.0,
+                value=float(st.session_state.get("home_monthly_target", 0.0)),
+                step=10000.0,
+                format="%.0f",
+                key="home_monthly_target",
+            )
+            annual_target = st.number_input(
+                "年度目标（财年）",
+                min_value=0.0,
+                value=float(st.session_state.get("home_annual_target", 0.0)),
+                step=50000.0,
+                format="%.0f",
+                key="home_annual_target",
+            )
+            st.caption("财年从4月开始。")
 
     metrics = calculate_business_dashboard_metrics(df, monthly_target, annual_target)
     if metrics.anchor_date is None:
@@ -197,35 +265,55 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
         return
 
     fiscal_year_end = metrics.fiscal_year_start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
+    basis = df.attrs.get("date_basis", "Completed Date")
+    basis_label = DATE_BASIS_LABELS.get(basis, basis)
+
     st.caption(
-        f"当前经营日期：{metrics.anchor_date}；"
-        f"当前财年：{metrics.fiscal_year_start.date()} 至 {fiscal_year_end.date()}。"
+        f"分析截止日期：{metrics.anchor_date} | "
+        f"当前财年：{metrics.fiscal_year_start.date()} 至 {fiscal_year_end.date()} | "
+        f"Date Basis：{basis_label}"
     )
+    st.caption(_scope_text(df))
 
-    row1 = st.columns(4)
-    row1[0].metric("月度完成率", _format_percent(metrics.monthly_completion), help="当前月份销售额 / 月度目标")
-    row1[1].metric("年度完成率", _format_percent(metrics.annual_completion), help="当前财年至今销售额 / 年度目标")
-    row1[2].metric("月度同比", _format_percent(metrics.monthly_yoy), help="当前月份销售额 vs 去年同月销售额")
-    row1[3].metric("财年累计同比", _format_percent(metrics.fiscal_ytd_yoy), help="当前财年至今 vs 上一财年同期")
+    status_text, status_level = business_status(metrics)
+    status_message = f"经营状态：{status_text}"
+    if status_level == "success":
+        st.success(status_message)
+    elif status_level == "warning":
+        st.warning(status_message)
+    else:
+        st.info(status_message)
 
-    row2 = st.columns(4)
-    row2[0].metric("月度销售额", money(metrics.monthly_sales), help="沿用当前首页销售额口径")
-    row2[1].metric("财年累计销售额", money(metrics.annual_sales), help="财年从4月1日开始")
-    row2[2].metric("月度剩余目标", money(metrics.monthly_remaining_target))
-    row2[3].metric("年度剩余目标", money(metrics.annual_remaining_target))
+    st.markdown("#### 本月核心指标")
+    month_cols = st.columns(4)
+    month_cols[0].metric("本月销售额", money(metrics.monthly_sales))
+    month_cols[1].metric("本月完成率", _format_percent(metrics.monthly_completion))
+    month_cols[2].metric("本月同比", _format_percent(metrics.monthly_yoy))
+    month_cols[3].metric("Pace 差值", _format_signed_points(metrics.pace_gap), help="销售完成进度 - 工作日进度")
 
-    row3 = st.columns(4)
-    row3[0].metric("Pace", _format_pace(metrics.pace_ratio), help="销售完成进度 / 工作日进度")
-    row3[1].metric("工作日进度", _format_percent(metrics.workday_progress))
-    row3[2].metric("剩余工作日", f"{metrics.remaining_workdays} 天")
-    row3[3].metric(
+    st.info(generate_business_summary(metrics))
+
+    st.divider()
+    st.markdown("#### 年度经营")
+    annual_cols = st.columns(4)
+    annual_cols[0].metric("财年累计销售额", money(metrics.annual_sales))
+    annual_cols[1].metric("年度完成率", _format_percent(metrics.annual_completion))
+    annual_cols[2].metric("财年累计同比", _format_percent(metrics.fiscal_ytd_yoy))
+    annual_cols[3].metric("年度剩余目标", money(metrics.annual_remaining_target))
+
+    st.divider()
+    st.markdown("#### 行动指标")
+    action_cols = st.columns(3)
+    action_cols[0].metric("剩余目标", money(metrics.monthly_remaining_target))
+    action_cols[1].metric("剩余工作日", f"{metrics.remaining_workdays} 天")
+    action_cols[2].metric(
         "达标所需日均销售额",
-        "已达标" if metrics.monthly_remaining_target == 0 else money(metrics.required_daily_sales or 0.0),
+        "已达标" if metrics.monthly_remaining_target == 0 and metrics.monthly_target > 0 else money(metrics.required_daily_sales or 0.0),
     )
 
     progress_cols = st.columns(2)
     with progress_cols[0]:
-        st.caption("销售进度")
+        st.caption("本月销售进度")
         st.progress(_progress(metrics.monthly_completion), text=_format_percent(metrics.monthly_completion))
     with progress_cols[1]:
         st.caption("工作日进度")

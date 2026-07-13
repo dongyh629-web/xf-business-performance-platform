@@ -5,13 +5,13 @@ import streamlit as st
 from app.config import DATA_PATH, PERSIST_UPLOADED_DATA
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, load_processed_data, monthly_sales, save_processed_data, top_entity_table, top_table
-from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_context_summary, show_filters
+from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_filters
 
 
 st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout="wide")
 
-st.title("XF 内部商业分析系统")
-st.caption("查看销售总览、核心客户和产品组表现")
+st.title("鲜锋经营驾驶舱")
+st.caption("XF Business Performance Dashboard")
 
 
 def data_updated_at() -> str | None:
@@ -21,14 +21,22 @@ def data_updated_at() -> str | None:
 
 
 with st.sidebar:
-    st.header("数据导入")
-    if st.button("更新数据", use_container_width=True):
-        st.session_state["show_data_uploader"] = True
     show_uploader = st.session_state.get("show_data_uploader", not DATA_PATH.exists())
     uploaded = None
-    if show_uploader:
-        uploaded = st.file_uploader("上传 Unleashed Excel 文件", type=["xlsx"])
-    st.caption("默认口径：完成日期（Completed Date）。可在下方“分析日期口径”中切换。")
+    with st.expander("数据导入", expanded=not DATA_PATH.exists() or show_uploader):
+        current_file = st.session_state.get("source_file_name") or st.session_state.get("current_file_name") or "latest_sales.parquet"
+        last_updated = st.session_state.get("data_last_updated") or data_updated_at()
+        if DATA_PATH.exists() or st.session_state.get("clean_data") is not None:
+            st.caption(f"当前文件：{current_file}")
+            if last_updated:
+                st.caption(f"更新时间：{last_updated}")
+        else:
+            st.caption("当前暂无数据")
+        if st.button("更新数据", use_container_width=True):
+            st.session_state["show_data_uploader"] = True
+            show_uploader = True
+        if show_uploader:
+            uploaded = st.file_uploader("上传 Unleashed Excel 文件", type=["xlsx"])
 
 if uploaded is not None:
     try:
@@ -41,6 +49,7 @@ if uploaded is not None:
             st.session_state["sheet_name"] = result.sheet_name
             st.session_state["clean_data"] = result.clean
             st.session_state["current_file_name"] = "latest_sales.parquet"
+            st.session_state["source_file_name"] = getattr(uploaded, "name", "latest_sales.parquet")
             st.session_state["data_source"] = "uploaded" if PERSIST_UPLOADED_DATA else "session_upload"
             st.session_state["data_last_updated"] = data_updated_at()
             st.session_state["source_columns"] = list(result.raw.columns)
@@ -72,17 +81,15 @@ if df is None:
 filtered = show_filters(df, "home")
 
 show_code_warning(filtered)
-show_context_summary(filtered)
 quality = st.session_state.get("quality", {})
 if quality:
-    st.caption(f"当前主业绩日期：{quality.get('主业绩日期', '未知')}。{quality.get('主业绩日期说明', '')}")
     if quality.get("日期质量警告"):
         st.warning(str(quality["日期质量警告"]))
 
 render_business_dashboard(filtered)
 st.divider()
 
-metric_row(filtered)
+st.subheader("趋势和结构")
 
 monthly = monthly_sales(filtered)
 left, right = st.columns([1.4, 1])
@@ -103,6 +110,9 @@ with left:
 with right:
     customer_types = top_table(filtered, "Customer Type", 20)
     st.plotly_chart(donut_chart(customer_types, "Customer Type", "Sales Amount", "客户类型销售占比"), width="stretch")
+
+with st.expander("查看当前筛选数据概览"):
+    metric_row(filtered)
 
 with st.expander("查看清洗后数据预览"):
     st.download_button(
