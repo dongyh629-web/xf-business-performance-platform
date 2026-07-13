@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from app.config import DATE_BASIS_LABELS, NEW_CUSTOMER_START_DATE
-from app.customer_health import PRIORITY_ORDER, analysis_cutoff, build_customer_health
+from app import config as app_config
+from app.customer_health import NEW_CUSTOMER_START_DATE, PRIORITY_ORDER, analysis_cutoff, build_customer_health
 from app.data import apply_date_basis, load_processed_data
 from app.ui import money, percent, show_code_warning, show_context_summary, show_filters
 
@@ -126,7 +126,8 @@ history = history[history_dates.le(anchor)].copy()
 result = build_customer_health(history, history)
 
 basis = filtered.attrs.get("date_basis", st.session_state.get("date_basis", "Completed Date"))
-basis_label = DATE_BASIS_LABELS.get(basis, basis)
+basis_labels = getattr(app_config, "DATE_BASIS_LABELS", {})
+basis_label = basis_labels.get(basis, basis)
 st.caption(f"分析截止日期：{anchor.date()} | Date Basis：{basis_label} | 当前筛选范围：{_scope_text(filtered)}")
 st.caption("新客户当前以首次下单日期代替开户日期，自 2026 年 7 月起统计。")
 if result.excluded_missing_customer_code:
