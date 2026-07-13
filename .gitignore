@@ -1,0 +1,32 @@
+# Local Python environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# macOS
+.DS_Store
+
+# Secrets and local environment
+.env
+.env.*
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Business data and local generated artifacts
+data/*
+!data/.gitkeep
+uploads/*
+!uploads/.gitkeep
+outputs/
+*.xlsx
+*.xls
+*.csv
+*.parquet
+*.zip
+*.log

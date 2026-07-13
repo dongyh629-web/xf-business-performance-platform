@@ -1,0 +1,6 @@
+streamlit>=1.40,<2.0
+pandas>=2.2,<3.1
+openpyxl>=3.1,<4.0
+plotly>=5.20,<7.0
+kaleido>=0.2,<2.0
+pyarrow>=15,<26
