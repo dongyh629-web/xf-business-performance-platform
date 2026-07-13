@@ -3,6 +3,7 @@ from datetime import datetime
 import streamlit as st
 
 from app.config import DATA_PATH, PERSIST_UPLOADED_DATA
+from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, load_processed_data, monthly_sales, save_processed_data, top_entity_table, top_table
 from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_context_summary, show_filters
 
@@ -77,6 +78,9 @@ if quality:
     st.caption(f"当前主业绩日期：{quality.get('主业绩日期', '未知')}。{quality.get('主业绩日期说明', '')}")
     if quality.get("日期质量警告"):
         st.warning(str(quality["日期质量警告"]))
+
+render_business_dashboard(filtered)
+st.divider()
 
 metric_row(filtered)
 
