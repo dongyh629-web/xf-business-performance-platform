@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import streamlit as st
 
 from app.config import DATA_PATH, PERSIST_UPLOADED_DATA
@@ -10,31 +12,39 @@ st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout=
 st.title("XF 内部商业分析系统")
 st.caption("查看销售总览、核心客户和产品组表现")
 
+
+def data_updated_at() -> str | None:
+    if not DATA_PATH.exists():
+        return None
+    return datetime.fromtimestamp(DATA_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+
+
 with st.sidebar:
     st.header("数据导入")
-    uploaded = st.file_uploader("上传 Unleashed Excel 文件", type=["xlsx"])
+    if st.button("更新数据", use_container_width=True):
+        st.session_state["show_data_uploader"] = True
+    show_uploader = st.session_state.get("show_data_uploader", not DATA_PATH.exists())
+    uploaded = None
+    if show_uploader:
+        uploaded = st.file_uploader("上传 Unleashed Excel 文件", type=["xlsx"])
     st.caption("默认口径：完成日期（Completed Date）。可在下方“分析日期口径”中切换。")
 
 if uploaded is not None:
     try:
         with st.spinner("正在读取和清洗 Excel..."):
             result = import_excel(uploaded)
-            # Cloud demo mode keeps uploaded business data in this browser session only.
-            # The data may disappear after app restart, session end, or long inactivity.
-            # Local launcher scripts set XF_STORAGE_MODE=persistent to keep the existing
-            # single-user workflow that saves the latest processed Parquet locally.
             if PERSIST_UPLOADED_DATA:
                 save_processed_data(result.clean, DATA_PATH)
             st.session_state["quality"] = result.quality
             st.session_state["comparison"] = result.comparison
             st.session_state["sheet_name"] = result.sheet_name
             st.session_state["clean_data"] = result.clean
-            st.session_state["current_file_name"] = uploaded.name
-            st.session_state["data_source"] = "uploaded"
+            st.session_state["current_file_name"] = "latest_sales.parquet"
+            st.session_state["data_source"] = "uploaded" if PERSIST_UPLOADED_DATA else "session_upload"
+            st.session_state["data_last_updated"] = data_updated_at()
             st.session_state["source_columns"] = list(result.raw.columns)
+            st.session_state["show_data_uploader"] = False
         st.success(f"导入完成：已识别工作表 `{result.sheet_name}`")
-        if not PERSIST_UPLOADED_DATA:
-            st.caption("当前为云端演示模式：上传数据仅保存在本次浏览器会话中，不会写入共享数据文件。")
     except ValueError as exc:
         st.error(str(exc))
         st.stop()
@@ -46,15 +56,16 @@ df = st.session_state.get("clean_data")
 if df is None:
     df = load_processed_data(DATA_PATH)
     if df is not None:
-        st.session_state["data_source"] = "local_processed"
+        st.session_state["data_source"] = "persistent"
+        st.session_state["current_file_name"] = "latest_sales.parquet"
+        st.session_state["data_last_updated"] = data_updated_at()
 
 if df is None:
     with st.sidebar:
-        st.markdown("### 数据")
-        st.caption("当前暂无数据，请上传 Unleashed Excel 文件。")
-        st.caption(f"当前存储模式：{'本地持久模式' if PERSIST_UPLOADED_DATA else '会话临时模式'}")
+        st.markdown("### 数据状态")
+        st.caption("当前暂无数据")
+        st.caption("请上传 Unleashed Excel。")
     st.info("当前暂无销售数据，请上传 Unleashed 导出的 Excel 文件开始分析。")
-    st.caption("云端演示模式下，上传数据仅保存在当前浏览器会话中；应用重启、会话结束或长时间不活动后数据可能丢失。")
     st.stop()
 
 filtered = show_filters(df, "home")

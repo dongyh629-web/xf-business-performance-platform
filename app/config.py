@@ -7,11 +7,10 @@ from pathlib import Path
 DATA_PATH = Path("data/processed/latest_sales.parquet")
 
 # Deployment storage mode:
-# - "session" is the safe default for Streamlit Cloud demos. Uploaded business data
-#   stays in the current browser session and may disappear after inactivity/restart.
-# - Local launcher scripts set "persistent" to preserve the existing single-user
-#   workflow that saves processed data to DATA_PATH.
-STORAGE_MODE = os.getenv("XF_STORAGE_MODE", "session").strip().lower()
+# - "persistent" saves the latest processed data to DATA_PATH after upload, so the
+#   next app session can load the latest dataset without requiring another upload.
+# - "session" remains available for temporary demos, but is no longer the default.
+STORAGE_MODE = os.getenv("XF_STORAGE_MODE", "persistent").strip().lower()
 PERSIST_UPLOADED_DATA = STORAGE_MODE == "persistent"
 
 # Main performance date for sales reporting.

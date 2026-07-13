@@ -4,9 +4,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import date
+from datetime import date, datetime
 
-from app.config import DATE_BASIS_DESCRIPTIONS, DATE_BASIS_LABELS, DATE_BASIS_OPTIONS
+from app.config import DATA_PATH, DATE_BASIS_DESCRIPTIONS, DATE_BASIS_LABELS, DATE_BASIS_OPTIONS
 from app.data import apply_date_basis
 
 
@@ -65,20 +65,25 @@ def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
     range_text = f"{data_range[0]} 至 {data_range[1]}" if data_range else "无有效日期"
     current_file = st.session_state.get("current_file_name")
     data_source = st.session_state.get("data_source")
+    last_updated = st.session_state.get("data_last_updated")
+    if not last_updated and DATA_PATH.exists():
+        last_updated = datetime.fromtimestamp(DATA_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     if data_source == "uploaded" and current_file:
-        source_text = "当前数据来源：本次会话上传文件"
-        data_label = current_file
-    elif data_source == "local_processed" or not current_file:
-        source_text = "当前数据来源：本地已处理数据"
-        data_label = current_file or "本地已处理数据"
+        source_text = "来源：latest_sales.parquet"
+        data_label = "已加载"
+    elif data_source == "persistent" or data_source == "local_processed" or not current_file:
+        source_text = "来源：latest_sales.parquet"
+        data_label = "已加载"
     else:
         source_text = "当前暂无数据，请上传 Unleashed Excel 文件。"
         data_label = "暂无数据"
 
     with st.sidebar:
-        st.markdown("### 数据")
-        st.caption(f"数据文件：{data_label}")
+        st.markdown("### 数据状态")
+        st.caption(f"当前数据：{data_label}")
         st.caption(source_text)
+        if last_updated:
+            st.caption(f"最后更新时间：{last_updated}")
         st.caption(f"数据日期范围：{range_text}")
 
         st.markdown("### 日期")
