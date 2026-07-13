@@ -16,7 +16,6 @@ def percent(value: float) -> str:
     return f"{value:.1%}"
 
 
-FISCAL_YEAR_START_MONTH = 4
 PACE_NORMAL_BAND = 0.05
 
 
@@ -25,7 +24,8 @@ class BusinessDashboardMetrics:
     anchor_date: date | None
     month_start: pd.Timestamp | None
     month_end: pd.Timestamp | None
-    fiscal_year_start: pd.Timestamp | None
+    year_start: pd.Timestamp | None
+    year_end: pd.Timestamp | None
     monthly_sales: float
     annual_sales: float
     monthly_target: float
@@ -34,8 +34,8 @@ class BusinessDashboardMetrics:
     annual_completion: float | None
     previous_year_month_sales: float
     monthly_yoy: float | None
-    previous_fiscal_ytd_sales: float
-    fiscal_ytd_yoy: float | None
+    previous_year_ytd_sales: float
+    annual_ytd_yoy: float | None
     elapsed_workdays: int
     total_workdays: int
     remaining_workdays: int
@@ -59,9 +59,8 @@ def _business_days(start: pd.Timestamp, end: pd.Timestamp) -> int:
     return len(pd.bdate_range(start.normalize(), end.normalize()))
 
 
-def _fiscal_year_start(anchor: pd.Timestamp) -> pd.Timestamp:
-    year = anchor.year if anchor.month >= FISCAL_YEAR_START_MONTH else anchor.year - 1
-    return pd.Timestamp(year=year, month=FISCAL_YEAR_START_MONTH, day=1)
+def _calendar_year_start(anchor: pd.Timestamp) -> pd.Timestamp:
+    return pd.Timestamp(year=anchor.year, month=1, day=1)
 
 
 def calculate_business_dashboard_metrics(
@@ -78,7 +77,8 @@ def calculate_business_dashboard_metrics(
             anchor_date=None,
             month_start=None,
             month_end=None,
-            fiscal_year_start=None,
+            year_start=None,
+            year_end=None,
             monthly_sales=0.0,
             annual_sales=0.0,
             monthly_target=float(monthly_target),
@@ -87,8 +87,8 @@ def calculate_business_dashboard_metrics(
             annual_completion=None,
             previous_year_month_sales=0.0,
             monthly_yoy=None,
-            previous_fiscal_ytd_sales=0.0,
-            fiscal_ytd_yoy=None,
+            previous_year_ytd_sales=0.0,
+            annual_ytd_yoy=None,
             elapsed_workdays=0,
             total_workdays=0,
             remaining_workdays=0,
@@ -103,23 +103,24 @@ def calculate_business_dashboard_metrics(
     anchor = valid["Performance Date"].max().normalize()
     month_start = anchor.replace(day=1)
     month_end = month_start + pd.offsets.MonthEnd(0)
-    fiscal_start = _fiscal_year_start(anchor)
+    year_start = _calendar_year_start(anchor)
+    year_end = pd.Timestamp(year=anchor.year, month=12, day=31)
 
     month_mask = valid["Performance Date"].between(month_start, month_end, inclusive="both")
-    fiscal_ytd_mask = valid["Performance Date"].between(fiscal_start, anchor, inclusive="both")
+    annual_ytd_mask = valid["Performance Date"].between(year_start, anchor, inclusive="both")
 
     previous_month_start = month_start - pd.DateOffset(years=1)
     previous_month_end = month_end - pd.DateOffset(years=1)
-    previous_fiscal_start = fiscal_start - pd.DateOffset(years=1)
-    previous_fiscal_anchor = anchor - pd.DateOffset(years=1)
+    previous_year_start = year_start - pd.DateOffset(years=1)
+    previous_year_anchor = anchor - pd.DateOffset(years=1)
 
     previous_month_mask = valid["Performance Date"].between(previous_month_start, previous_month_end, inclusive="both")
-    previous_fiscal_ytd_mask = valid["Performance Date"].between(previous_fiscal_start, previous_fiscal_anchor, inclusive="both")
+    previous_year_ytd_mask = valid["Performance Date"].between(previous_year_start, previous_year_anchor, inclusive="both")
 
     monthly_sales = float(valid.loc[month_mask, "Sales Amount"].sum())
-    annual_sales = float(valid.loc[fiscal_ytd_mask, "Sales Amount"].sum())
+    annual_sales = float(valid.loc[annual_ytd_mask, "Sales Amount"].sum())
     previous_month_sales = float(valid.loc[previous_month_mask, "Sales Amount"].sum())
-    previous_fiscal_ytd_sales = float(valid.loc[previous_fiscal_ytd_mask, "Sales Amount"].sum())
+    previous_year_ytd_sales = float(valid.loc[previous_year_ytd_mask, "Sales Amount"].sum())
 
     elapsed_workdays = _business_days(month_start, anchor)
     total_workdays = _business_days(month_start, month_end)
@@ -136,7 +137,8 @@ def calculate_business_dashboard_metrics(
         anchor_date=anchor.date(),
         month_start=month_start,
         month_end=month_end,
-        fiscal_year_start=fiscal_start,
+        year_start=year_start,
+        year_end=year_end,
         monthly_sales=monthly_sales,
         annual_sales=annual_sales,
         monthly_target=float(monthly_target),
@@ -145,8 +147,8 @@ def calculate_business_dashboard_metrics(
         annual_completion=annual_completion,
         previous_year_month_sales=previous_month_sales,
         monthly_yoy=_safe_ratio(monthly_sales - previous_month_sales, previous_month_sales),
-        previous_fiscal_ytd_sales=previous_fiscal_ytd_sales,
-        fiscal_ytd_yoy=_safe_ratio(annual_sales - previous_fiscal_ytd_sales, previous_fiscal_ytd_sales),
+        previous_year_ytd_sales=previous_year_ytd_sales,
+        annual_ytd_yoy=_safe_ratio(annual_sales - previous_year_ytd_sales, previous_year_ytd_sales),
         elapsed_workdays=elapsed_workdays,
         total_workdays=total_workdays,
         remaining_workdays=remaining_workdays,
@@ -250,27 +252,26 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
                 key="home_monthly_target",
             )
             annual_target = st.number_input(
-                "年度目标（财年）",
+                "年度目标（自然年）",
                 min_value=0.0,
                 value=float(st.session_state.get("home_annual_target", 0.0)),
                 step=50000.0,
                 format="%.0f",
                 key="home_annual_target",
             )
-            st.caption("财年从4月开始。")
+            st.caption("年度范围为1月1日至12月31日。")
 
     metrics = calculate_business_dashboard_metrics(df, monthly_target, annual_target)
     if metrics.anchor_date is None:
         st.info("当前筛选结果没有有效日期，无法计算经营驾驶舱指标。")
         return
 
-    fiscal_year_end = metrics.fiscal_year_start + pd.DateOffset(years=1) - pd.Timedelta(days=1)
     basis = df.attrs.get("date_basis", "Completed Date")
     basis_label = DATE_BASIS_LABELS.get(basis, basis)
 
     st.caption(
         f"分析截止日期：{metrics.anchor_date} | "
-        f"当前财年：{metrics.fiscal_year_start.date()} 至 {fiscal_year_end.date()} | "
+        f"当前年度：{metrics.year_start.date()} 至 {metrics.year_end.date()} | "
         f"Date Basis：{basis_label}"
     )
     st.caption(_scope_text(df))
@@ -296,9 +297,9 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
     st.divider()
     st.markdown("#### 年度经营")
     annual_cols = st.columns(4)
-    annual_cols[0].metric("财年累计销售额", money(metrics.annual_sales))
+    annual_cols[0].metric("年度累计销售额", money(metrics.annual_sales))
     annual_cols[1].metric("年度完成率", _format_percent(metrics.annual_completion))
-    annual_cols[2].metric("财年累计同比", _format_percent(metrics.fiscal_ytd_yoy))
+    annual_cols[2].metric("年度累计同比", _format_percent(metrics.annual_ytd_yoy))
     annual_cols[3].metric("年度剩余目标", money(metrics.annual_remaining_target))
 
     st.divider()

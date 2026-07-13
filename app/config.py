@@ -35,6 +35,39 @@ DATE_BASIS_DESCRIPTIONS = {
 ABC_A_THRESHOLD = 0.70
 ABC_B_THRESHOLD = 0.90
 
+TRACKING_CLOSE_TO_TARGET_THRESHOLD = 0.90
+TARGET_YEAR_CANDIDATES = ["Year", "年份", "年度", "目标年度", "Calendar Year"]
+TARGET_MONTH_CANDIDATES = ["Month", "月份", "月", "月份序号"]
+TARGET_ORIGINAL_CANDIDATES = [
+    "Target",
+    "Sales Target",
+    "Original Target",
+    "Original Sales Target",
+    "目标",
+    "销售目标",
+    "原始目标",
+    "原始销售目标",
+    "月度目标",
+]
+TARGET_REVISED_CANDIDATES = [
+    "Revised Target",
+    "Revised Sales Target",
+    "Adjusted Target",
+    "调整后目标",
+    "调整销售目标",
+    "修订目标",
+]
+TARGET_ANNUAL_CANDIDATES = [
+    "Annual Target",
+    "Year Target",
+    "Annual Sales Target",
+    "年度目标",
+    "年度合计",
+    "全年目标",
+    "全年合计",
+]
+TARGET_NOTES_CANDIDATES = ["Notes", "Note", "备注", "说明"]
+
 UI_TEXT = {
     "customer_count": "客户数",
     "total_sales": "总销售额",
