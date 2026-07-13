@@ -131,6 +131,15 @@ def _show_data_status(sales_df: pd.DataFrame | None) -> None:
             st.caption(f"已识别工作表：{st.session_state.get('target_structure_label', '无')}")
 
 
+def _analyze_target_bytes(target_bytes: bytes):
+    try:
+        return analyze_target_workbook(BytesIO(target_bytes))
+    except ValueError:
+        st.error("目标 Excel 无法读取，请确认文件是有效的 .xlsx 工作簿。")
+        st.stop()
+        raise SystemExit
+
+
 st.set_page_config(page_title="经营追踪", layout="wide")
 st.title("经营追踪")
 st.caption("Business Tracking")
@@ -150,7 +159,7 @@ st.subheader("目标数据上传")
 uploaded_target = st.file_uploader("上传目标表 / Upload Targets Excel", type=["xlsx"], key="target_excel_upload")
 if uploaded_target is not None:
     uploaded_target_bytes = uploaded_target.getvalue()
-    target_analysis_preview = analyze_target_workbook(BytesIO(uploaded_target_bytes))
+    target_analysis_preview = _analyze_target_bytes(uploaded_target_bytes)
     if not target_analysis_preview.candidates and workbook_looks_like_sales_data(BytesIO(uploaded_target_bytes)):
         st.error("该文件看起来像销售明细，不像目标表。请使用左侧‘上传销售明细’入口。")
         st.stop()
@@ -166,7 +175,7 @@ if not target_bytes:
 target_name = st.session_state.get("target_excel_name", "目标 Excel")
 st.caption(f"当前目标文件：{target_name}")
 
-analysis = analyze_target_workbook(BytesIO(target_bytes))
+analysis = _analyze_target_bytes(target_bytes)
 candidate = None
 if analysis.candidates:
     labels = [item.label for item in analysis.candidates]

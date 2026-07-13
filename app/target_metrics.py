@@ -5,15 +5,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from app.config import (
-    REQUIRED_COLUMNS,
-    TARGET_ANNUAL_CANDIDATES,
-    TARGET_MONTH_CANDIDATES,
-    TARGET_NOTES_CANDIDATES,
-    TARGET_ORIGINAL_CANDIDATES,
-    TARGET_REVISED_CANDIDATES,
-    TARGET_YEAR_CANDIDATES,
-)
+from app.config import REQUIRED_COLUMNS
 
 
 MONTH_NAME_MAP = {
@@ -44,6 +36,38 @@ MONTH_NAME_MAP = {
 }
 
 MONTH_LABELS = {month: f"{month}月" for month in range(1, 13)}
+
+TARGET_YEAR_CANDIDATES = ["Year", "年份", "年度", "目标年度", "Calendar Year"]
+TARGET_MONTH_CANDIDATES = ["Month", "月份", "月", "月份序号"]
+TARGET_ORIGINAL_CANDIDATES = [
+    "Target",
+    "Sales Target",
+    "Original Target",
+    "Original Sales Target",
+    "目标",
+    "销售目标",
+    "原始目标",
+    "原始销售目标",
+    "月度目标",
+]
+TARGET_REVISED_CANDIDATES = [
+    "Revised Target",
+    "Revised Sales Target",
+    "Adjusted Target",
+    "调整后目标",
+    "调整销售目标",
+    "修订目标",
+]
+TARGET_ANNUAL_CANDIDATES = [
+    "Annual Target",
+    "Year Target",
+    "Annual Sales Target",
+    "年度目标",
+    "年度合计",
+    "全年目标",
+    "全年合计",
+]
+TARGET_NOTES_CANDIDATES = ["Notes", "Note", "备注", "说明"]
 
 
 @dataclass(frozen=True)
