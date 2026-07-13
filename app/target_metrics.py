@@ -6,6 +6,7 @@ from typing import Iterable
 import pandas as pd
 
 from app.config import (
+    REQUIRED_COLUMNS,
     TARGET_ANNUAL_CANDIDATES,
     TARGET_MONTH_CANDIDATES,
     TARGET_NOTES_CANDIDATES,
@@ -166,6 +167,24 @@ def analyze_target_workbook(excel_file) -> TargetWorkbookAnalysis:
                 candidates.append(candidate)
     candidates = sorted(candidates, key=lambda item: item.score, reverse=True)
     return TargetWorkbookAnalysis(candidates=candidates, sheet_names=workbook.sheet_names)
+
+
+def workbook_looks_like_sales_data(excel_file) -> bool:
+    try:
+        workbook = pd.ExcelFile(excel_file)
+    except Exception:
+        return False
+    required = set(REQUIRED_COLUMNS)
+    for sheet_name in workbook.sheet_names:
+        try:
+            preview = pd.read_excel(excel_file, sheet_name=sheet_name, header=None, nrows=12)
+        except Exception:
+            continue
+        for row_index in range(len(preview)):
+            values = {str(value).strip() for value in preview.iloc[row_index].dropna().tolist()}
+            if required.issubset(values):
+                return True
+    return False
 
 
 def _clean_year(value: object) -> int | None:

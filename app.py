@@ -1,10 +1,12 @@
 from datetime import datetime
+from io import BytesIO
 
 import streamlit as st
 
 from app.config import DATA_PATH, PERSIST_UPLOADED_DATA
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, load_processed_data, monthly_sales, save_processed_data, top_entity_table, top_table
+from app.target_metrics import analyze_target_workbook
 from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_filters
 
 
@@ -23,7 +25,7 @@ def data_updated_at() -> str | None:
 with st.sidebar:
     show_uploader = st.session_state.get("show_data_uploader", not DATA_PATH.exists())
     uploaded = None
-    with st.expander("数据导入", expanded=not DATA_PATH.exists() or show_uploader):
+    with st.expander("销售数据导入", expanded=not DATA_PATH.exists() or show_uploader):
         current_file = st.session_state.get("source_file_name") or st.session_state.get("current_file_name") or "latest_sales.parquet"
         last_updated = st.session_state.get("data_last_updated") or data_updated_at()
         if DATA_PATH.exists() or st.session_state.get("clean_data") is not None:
@@ -32,11 +34,11 @@ with st.sidebar:
                 st.caption(f"更新时间：{last_updated}")
         else:
             st.caption("当前暂无数据")
-        if st.button("更新数据", use_container_width=True):
+        if st.button("更新销售数据", use_container_width=True):
             st.session_state["show_data_uploader"] = True
             show_uploader = True
         if show_uploader:
-            uploaded = st.file_uploader("上传 Unleashed Excel 文件", type=["xlsx"])
+            uploaded = st.file_uploader("上传销售明细 / Upload Unleashed Sales Data", type=["xlsx"], key="sales_data_upload")
 
 if uploaded is not None:
     try:
@@ -56,7 +58,14 @@ if uploaded is not None:
             st.session_state["show_data_uploader"] = False
         st.success(f"导入完成：已识别工作表 `{result.sheet_name}`")
     except ValueError as exc:
-        st.error(str(exc))
+        try:
+            target_analysis = analyze_target_workbook(BytesIO(uploaded.getvalue()))
+        except Exception:
+            target_analysis = None
+        if target_analysis and target_analysis.candidates:
+            st.error("该文件看起来不像 Unleashed 销售明细，可能是目标表。请前往‘经营追踪’页面上传目标 Excel。")
+        else:
+            st.error(str(exc))
         st.stop()
     except Exception:
         st.error("导入失败：请确认文件是 Unleashed 导出的 Excel，且字段结构未发生变化。详细错误已记录在开发日志中。")
@@ -74,8 +83,8 @@ if df is None:
     with st.sidebar:
         st.markdown("### 数据状态")
         st.caption("当前暂无数据")
-        st.caption("请上传 Unleashed Excel。")
-    st.info("当前暂无销售数据，请上传 Unleashed 导出的 Excel 文件开始分析。")
+        st.caption("请上传 Unleashed 销售明细。")
+    st.info("当前暂无销售数据，请上传 Unleashed 销售明细文件开始分析。目标 Excel 请在“经营追踪”页面上传。")
     st.stop()
 
 filtered = show_filters(df, "home")

@@ -13,6 +13,7 @@ from app.target_metrics import (
     manual_candidate,
     normalize_targets,
     read_sheet_columns,
+    workbook_looks_like_sales_data,
 )
 from app.tracking_metrics import (
     analysis_year,
@@ -87,6 +88,49 @@ def _store_targets(target_df: pd.DataFrame, annual_targets: dict[int, float], st
     st.session_state["target_structure_label"] = structure_label
 
 
+def _sales_cutoff_text(sales_df: pd.DataFrame | None) -> str:
+    if sales_df is None or "Performance Date" not in sales_df.columns:
+        return "无"
+    dates = pd.to_datetime(sales_df["Performance Date"], errors="coerce").dropna()
+    if dates.empty:
+        return "无"
+    return str(dates.max().date())
+
+
+def _target_years_text(targets: pd.DataFrame | None) -> str:
+    if targets is None or targets.empty or "Year" not in targets.columns:
+        return "无"
+    years = sorted(targets["Year"].dropna().astype(int).unique().tolist())
+    return ", ".join(str(year) for year in years) if years else "无"
+
+
+def _show_data_status(sales_df: pd.DataFrame | None) -> None:
+    target_df = st.session_state.get("target_data")
+    status_cols = st.columns(2)
+    with status_cols[0]:
+        st.markdown("**销售数据**")
+        if sales_df is None:
+            st.caption("状态：未加载")
+            st.caption("当前文件名：无")
+            st.caption("数据截止日期：无")
+        else:
+            st.caption("状态：已加载")
+            st.caption(f"当前文件名：{st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or 'latest_sales.parquet'}")
+            st.caption(f"数据截止日期：{_sales_cutoff_text(sales_df)}")
+    with status_cols[1]:
+        st.markdown("**目标数据**")
+        if target_df is None:
+            st.caption("状态：未加载")
+            st.caption("当前文件名：无")
+            st.caption("已识别年份：无")
+            st.caption("已识别工作表：无")
+        else:
+            st.caption("状态：已加载")
+            st.caption(f"当前文件名：{st.session_state.get('target_excel_name', '目标 Excel')}")
+            st.caption(f"已识别年份：{_target_years_text(target_df)}")
+            st.caption(f"已识别工作表：{st.session_state.get('target_structure_label', '无')}")
+
+
 st.set_page_config(page_title="经营追踪", layout="wide")
 st.title("经营追踪")
 st.caption("Business Tracking")
@@ -97,28 +141,26 @@ if df is None:
     if df is not None:
         st.session_state["data_source"] = "local_processed"
 
-if df is None:
-    st.info("当前暂无销售数据，请回到首页上传 Unleashed 导出的 Excel 文件开始分析。")
-    st.stop()
+status_placeholder = st.empty()
+with status_placeholder.container():
+    st.subheader("数据状态")
+    _show_data_status(df)
 
-filtered = show_filters(df, "tracking")
-show_code_warning(filtered)
-show_context_summary(filtered)
-
-current_year = analysis_year(filtered)
-if current_year is None:
-    st.info("当前筛选结果没有有效 Performance Date，无法生成经营追踪。")
-    st.stop()
-
-st.subheader("目标数据")
-uploaded_target = st.file_uploader("上传销售目标 Excel", type=["xlsx"], key="target_excel_upload")
+st.subheader("目标数据上传")
+uploaded_target = st.file_uploader("上传目标表 / Upload Targets Excel", type=["xlsx"], key="target_excel_upload")
 if uploaded_target is not None:
-    st.session_state["target_excel_bytes"] = uploaded_target.getvalue()
-    st.session_state["target_excel_name"] = uploaded_target.name
+    uploaded_target_bytes = uploaded_target.getvalue()
+    target_analysis_preview = analyze_target_workbook(BytesIO(uploaded_target_bytes))
+    if not target_analysis_preview.candidates and workbook_looks_like_sales_data(BytesIO(uploaded_target_bytes)):
+        st.error("该文件看起来像销售明细，不像目标表。请使用左侧‘上传销售明细’入口。")
+        st.stop()
+    else:
+        st.session_state["target_excel_bytes"] = uploaded_target_bytes
+        st.session_state["target_excel_name"] = uploaded_target.name
 
 target_bytes = st.session_state.get("target_excel_bytes")
 if not target_bytes:
-    st.info("请上传目标 Excel。目标数据仅保存在当前会话中，不会长期保存。")
+    st.info("请上传目标 Excel，以查看月度目标、完成率、Gap 和年度追踪。")
     st.stop()
 
 target_name = st.session_state.get("target_excel_name", "目标 Excel")
@@ -165,6 +207,24 @@ except ValueError as exc:
     st.stop()
 
 _store_targets(target_df, annual_targets, candidate.label)
+
+status_placeholder.empty()
+with status_placeholder.container():
+    st.subheader("数据状态")
+    _show_data_status(df)
+
+if df is None:
+    st.info("目标表已加载。请使用左侧‘上传销售明细 / Upload Unleashed Sales Data’入口上传销售明细，以生成实际销售、完成率、Gap 和年度追踪。")
+    st.stop()
+
+filtered = show_filters(df, "tracking")
+show_code_warning(filtered)
+show_context_summary(filtered)
+
+current_year = analysis_year(filtered)
+if current_year is None:
+    st.info("当前筛选结果没有有效 Performance Date，无法生成经营追踪。")
+    st.stop()
 
 available_years = sorted(target_df["Year"].dropna().astype(int).unique().tolist())
 default_year_index = available_years.index(current_year) if current_year in available_years else 0
