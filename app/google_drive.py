@@ -155,6 +155,44 @@ def _escape_drive_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _normalize_drive_name(value: str) -> str:
+    return " ".join(str(value).strip().casefold().split())
+
+
+def _list_drive_children(service, folder_id: str, mime_type: str | None = None) -> list[dict[str, Any]]:
+    query_parts = [f"'{_escape_drive_query_value(folder_id)}' in parents", "trashed = false"]
+    if mime_type:
+        query_parts.append(f"mimeType = '{_escape_drive_query_value(mime_type)}'")
+    try:
+        response = (
+            service.files()
+            .list(
+                q=" and ".join(query_parts),
+                fields="files(id,name,mimeType,modifiedTime,size,webViewLink)",
+                pageSize=100,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora="allDrives",
+            )
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Google Drive child listing failed")
+        raise DriveUserError("Google Drive 文件夹内容读取失败，请检查文件夹权限。") from exc
+    return response.get("files", [])
+
+
+def _metadata_from_drive_item(item: dict[str, Any], fallback_name: str) -> DriveFileMetadata:
+    return DriveFileMetadata(
+        file_id=str(item.get("id")),
+        name=str(item.get("name", fallback_name)),
+        modified_time=item.get("modifiedTime"),
+        mime_type=item.get("mimeType"),
+        size=item.get("size"),
+        web_view_link=item.get("webViewLink"),
+    )
+
+
 def find_drive_file(service, folder_id: str, file_name: str) -> DriveFileMetadata:
     query = (
         f"'{_escape_drive_query_value(folder_id)}' in parents and "
@@ -179,17 +217,23 @@ def find_drive_file(service, folder_id: str, file_name: str) -> DriveFileMetadat
 
     files = response.get("files", [])
     if not files:
+        children = _list_drive_children(service, folder_id)
+        child_names = [str(item.get("name", "")) for item in children if item.get("name")]
+        logger.info("Google Drive files visible in current folder: %s", child_names)
+        normalized_target = _normalize_drive_name(file_name)
+        normalized_matches = [
+            item for item in children if _normalize_drive_name(str(item.get("name", ""))) == normalized_target
+        ]
+        if normalized_matches:
+            files = normalized_matches
+        else:
+            logger.info("Google Drive file not found in current folder file_name=%s", file_name)
+    if not files:
         raise DriveUserError(f"Google Drive 文件夹中未找到文件：{file_name}。")
     files = sorted(files, key=lambda item: item.get("modifiedTime", ""), reverse=True)
     item = files[0]
-    return DriveFileMetadata(
-        file_id=str(item.get("id")),
-        name=str(item.get("name", file_name)),
-        modified_time=item.get("modifiedTime"),
-        mime_type=item.get("mimeType"),
-        size=item.get("size"),
-        web_view_link=item.get("webViewLink"),
-    )
+    logger.info("Google Drive file selected name=%s", item.get("name", file_name))
+    return _metadata_from_drive_item(item, file_name)
 
 
 def find_drive_folder(service, parent_folder_id: str, folder_name: str) -> DriveFileMetadata:
@@ -216,16 +260,23 @@ def find_drive_folder(service, parent_folder_id: str, folder_name: str) -> Drive
         raise DriveUserError("Google Drive 子文件夹查找失败，请检查文件夹权限。") from exc
     folders = response.get("files", [])
     if not folders:
+        children = _list_drive_children(service, parent_folder_id, "application/vnd.google-apps.folder")
+        child_names = [str(item.get("name", "")) for item in children if item.get("name")]
+        logger.info("Google Drive folders visible in root folder: %s", child_names)
+        normalized_target = _normalize_drive_name(folder_name)
+        normalized_matches = [
+            item for item in children if _normalize_drive_name(str(item.get("name", ""))) == normalized_target
+        ]
+        if normalized_matches:
+            folders = normalized_matches
+        else:
+            logger.info("Google Drive subfolder not found folder_name=%s", folder_name)
+    if not folders:
         raise DriveUserError(f"Google Drive 文件夹中未找到子文件夹：{folder_name}。")
     folders = sorted(folders, key=lambda item: item.get("modifiedTime", ""), reverse=True)
     item = folders[0]
-    return DriveFileMetadata(
-        file_id=str(item.get("id")),
-        name=str(item.get("name", folder_name)),
-        modified_time=item.get("modifiedTime"),
-        mime_type=item.get("mimeType"),
-        web_view_link=item.get("webViewLink"),
-    )
+    logger.info("Google Drive subfolder selected name=%s", item.get("name", folder_name))
+    return _metadata_from_drive_item(item, folder_name)
 
 
 def find_drive_file_in_folder_path(
@@ -237,14 +288,16 @@ def find_drive_file_in_folder_path(
     search_locations: list[tuple[str, str]] = []
     try:
         subfolder = find_drive_folder(service, root_folder_id, subfolder_name)
+        logger.info("Google Drive searching subfolder name=%s", subfolder.name)
         search_locations.append((subfolder.file_id, subfolder_name))
     except DriveUserError as exc:
         logger.info("Google Drive subfolder unavailable name=%s reason=%s", subfolder_name, exc.__class__.__name__)
     search_locations.append((root_folder_id, "root"))
 
     errors: list[str] = []
-    for folder_id, _label in search_locations:
+    for folder_id, label in search_locations:
         for file_name in file_names:
+            logger.info("Google Drive searching file folder=%s file_name=%s", label, file_name)
             try:
                 return find_drive_file(service, folder_id, file_name)
             except DriveUserError as exc:
