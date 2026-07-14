@@ -343,7 +343,9 @@ else:
     sort_column, ascending = sort_options[sort_label]
     filtered_risk = filtered_risk.sort_values(sort_column, ascending=ascending).drop(columns=["_priority_order"], errors="ignore")
 
-    st.dataframe(_style_status_columns(_display_risk_table(filtered_risk)), width="stretch", hide_index=True)
+    st.caption(f"当前筛选结果 {len(filtered_risk):,} 位客户，页面默认显示前 100 位；下载文件包含完整结果。")
+    risk_view = filtered_risk.head(100)
+    st.dataframe(_style_status_columns(_display_risk_table(risk_view)), width="stretch", hide_index=True)
     st.download_button(
         "下载风险客户名单 / Download Customer Risk List",
         _csv_bytes(filtered_risk),
@@ -351,13 +353,15 @@ else:
         mime="text/csv",
     )
 
-with st.expander("长期沉睡或可能流失 / Dormant or Lost", expanded=False):
+load_dormant = st.toggle("加载长期沉睡或可能流失客户", value=False)
+if load_dormant:
     dormant_lost = result.dormant_lost_customers.copy()
     if dormant_lost.empty:
         st.info("当前没有识别到长期沉睡或可能流失客户。")
     else:
         st.caption("这些客户不进入今日待跟进前列，用于后续清理、重新激活或单独复盘。")
-        st.dataframe(_style_status_columns(_display_risk_table(dormant_lost)), width="stretch", hide_index=True)
+        st.caption(f"共 {len(dormant_lost):,} 位客户，页面默认显示前 100 位；下载文件包含完整结果。")
+        st.dataframe(_style_status_columns(_display_risk_table(dormant_lost.head(100))), width="stretch", hide_index=True)
         st.download_button(
             "下载长期沉睡客户 / Download Dormant Customers",
             _csv_bytes(dormant_lost),

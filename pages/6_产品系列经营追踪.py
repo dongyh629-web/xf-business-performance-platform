@@ -464,8 +464,13 @@ with right:
     )
 
 section_header("单系列详情", "查看 SKU、客户贡献变化，以及主要增长贡献和主要下降拖累。")
-detail_range = st.selectbox("选择单系列", [item for item in range_options if item != "全部"], index=0 if len(range_options) > 1 else None)
-if detail_range:
+load_detail = st.toggle("加载单系列贡献分析", value=False)
+if load_detail:
+    detail_range = st.selectbox("选择单系列", [item for item in range_options if item != "全部"], index=0 if len(range_options) > 1 else None)
+else:
+    st.caption("默认不加载单系列贡献拆解，以加快页面切换。")
+    detail_range = None
+if load_detail and detail_range:
     detail_trend = _cached_monthly_trend(filtered, amount_targets, selected_year, detail_range)
     st.plotly_chart(_bar_line_chart(detail_trend), width="stretch")
     product_dimension = "Product Label" if "Product Label" in filtered.columns else "Product"
@@ -488,7 +493,8 @@ if detail_range:
         st.dataframe(customer_decline.rename(columns={customer_dimension: "客户", "Current": "本月", "Previous": "去年同期", "Change": "差额"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 差额=lambda data: data["差额"].map(_fmt_money)), width="stretch", hide_index=True)
 
 if "table" in locals() and not table.empty:
-    with st.expander("查看完整指标明细", expanded=False):
+    load_full_detail = st.toggle("查看完整指标明细", value=False)
+    if load_full_detail:
         detail_columns = [
             "产品系列",
             "当前状态",

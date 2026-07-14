@@ -22,6 +22,7 @@ oauth_token.json
 refresh_token.txt
 
 # Business data and local generated artifacts
+.cache/
 data/*
 !data/.gitkeep
 uploads/*

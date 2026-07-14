@@ -3,12 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
+import json
 import logging
+from pathlib import Path
+import pickle
 import re
+import time
 from typing import Any
 
 import pandas as pd
+import streamlit as st
 
+from app.config import METHODOLOGY_VERSION
 from app.data import ImportResult, import_excel
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
 
@@ -22,6 +28,12 @@ SALES_FOLDER_NAME = "sales data"
 TARGETS_FOLDER_NAME = "targets"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
+DRIVE_CACHE_VERSION = f"drive_cache_v2_{METHODOLOGY_VERSION}"
+CACHE_DIR = Path(".cache")
+CACHE_METADATA_PATH = CACHE_DIR / "metadata.json"
+CACHE_SALES_PATH = CACHE_DIR / "sales_clean.parquet"
+CACHE_SALES_EXTRAS_PATH = CACHE_DIR / "sales_extras.pkl"
+CACHE_TARGETS_PATH = CACHE_DIR / "targets_clean.pkl"
 
 
 class DriveUserError(RuntimeError):
@@ -81,6 +93,214 @@ class _NamedBytesIO(BytesIO):
         self.name = name
 
 
+def _timer() -> float:
+    return time.perf_counter()
+
+
+def _perf_log(step: str, start: float, rows: int | None = None, cache: str | None = None) -> None:
+    details = ["perf_step=%s", "elapsed=%.3fs"]
+    args: list[object] = [step, time.perf_counter() - start]
+    if rows is not None:
+        details.append("rows=%s")
+        args.append(rows)
+    if cache:
+        details.append("cache=%s")
+        args.append(cache)
+    logger.info(" ".join(details), *args)
+
+
+def _ensure_cache_dir() -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _read_cache_metadata() -> dict[str, Any]:
+    try:
+        if not CACHE_METADATA_PATH.exists():
+            return {}
+        return json.loads(CACHE_METADATA_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Local dashboard cache metadata is unreadable; rebuilding cache")
+        return {}
+
+
+def _write_cache_metadata(metadata: dict[str, Any]) -> None:
+    _ensure_cache_dir()
+    safe = {key: value for key, value in metadata.items() if "secret" not in key.lower() and "token" not in key.lower()}
+    CACHE_METADATA_PATH.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _cache_matches(kind: str, metadata: DriveFileMetadata, cache_metadata: dict[str, Any]) -> bool:
+    return (
+        cache_metadata.get("cache_version") == DRIVE_CACHE_VERSION
+        and cache_metadata.get(f"{kind}_file_id") == metadata.file_id
+        and cache_metadata.get(f"{kind}_modified_time") == metadata.modified_time
+    )
+
+
+def _restore_sales_cache(metadata: DriveFileMetadata | None = None) -> bool:
+    start = _timer()
+    if not CACHE_SALES_PATH.exists() or not CACHE_SALES_EXTRAS_PATH.exists():
+        return False
+    try:
+        clean = pd.read_parquet(CACHE_SALES_PATH)
+        with CACHE_SALES_EXTRAS_PATH.open("rb") as handle:
+            extras = pickle.load(handle)
+        result = ImportResult(
+            raw=pd.DataFrame(columns=extras.get("source_columns", [])),
+            clean=clean,
+            quality=extras.get("quality", {}),
+            sheet_name=extras.get("sheet_name", ""),
+            comparison=extras.get("comparison", {}),
+        )
+        file_name = metadata.name if metadata else extras.get("file_name", "Cached sales data")
+        modified_time = metadata.modified_time if metadata else extras.get("modified_time")
+        store_sales_import_in_session(result, file_name, DRIVE_SOURCE_LABEL, "drive", modified_time)
+        if metadata:
+            _set_drive_sales_success(metadata, result, "本地缓存", [])
+        else:
+            st = _get_streamlit()
+            st.session_state["drive_sales_file_id"] = extras.get("file_id")
+            st.session_state["drive_sales_file_name"] = file_name
+            st.session_state["drive_sales_modified_time"] = modified_time
+            st.session_state["drive_sales_loaded_at"] = extras.get("cache_created_at")
+            st.session_state["drive_sales_status"] = "使用本地缓存"
+            st.session_state["drive_sales_row_count"] = int(len(clean))
+            st.session_state["drive_sales_max_date"] = _sales_max_date(clean)
+        _perf_log("restore_sales_parquet", start, len(clean), "hit")
+        return True
+    except Exception:
+        logger.exception("Local sales cache restore failed")
+        _perf_log("restore_sales_parquet", start, cache="corrupt")
+        return False
+
+
+def _write_sales_cache(metadata: DriveFileMetadata, result: ImportResult) -> None:
+    start = _timer()
+    try:
+        _ensure_cache_dir()
+        result.clean.to_parquet(CACHE_SALES_PATH, index=False)
+        extras = {
+            "file_id": metadata.file_id,
+            "file_name": metadata.name,
+            "modified_time": metadata.modified_time,
+            "quality": result.quality,
+            "comparison": result.comparison,
+            "sheet_name": result.sheet_name,
+            "source_columns": list(result.raw.columns),
+            "cache_created_at": _now_text(),
+        }
+        with CACHE_SALES_EXTRAS_PATH.open("wb") as handle:
+            pickle.dump(extras, handle)
+        cache_metadata = _read_cache_metadata()
+        cache_metadata.update(
+            {
+                "cache_version": DRIVE_CACHE_VERSION,
+                "sales_file_id": metadata.file_id,
+                "sales_modified_time": metadata.modified_time,
+                "sales_file_name": metadata.name,
+                "sales_size": metadata.size,
+                "sales_max_date": _sales_max_date(result.clean),
+                "cache_created_at": _now_text(),
+            }
+        )
+        _write_cache_metadata(cache_metadata)
+        _perf_log("write_sales_parquet", start, len(result.clean), "miss")
+    except Exception:
+        logger.exception("Local sales cache write failed")
+
+
+def _restore_target_cache(metadata: DriveFileMetadata | None = None) -> bool:
+    start = _timer()
+    if not CACHE_TARGETS_PATH.exists():
+        return False
+    try:
+        with CACHE_TARGETS_PATH.open("rb") as handle:
+            parsed = pickle.load(handle)
+        file_name = metadata.name if metadata else getattr(parsed, "cache_file_name", "Cached targets")
+        modified_time = metadata.modified_time if metadata else getattr(parsed, "cache_modified_time", None)
+        store_target_workbook_in_session(parsed, file_name, DRIVE_SOURCE_LABEL, "drive", modified_time)
+        if metadata:
+            _set_drive_target_success(metadata, parsed, "本地缓存", [])
+        else:
+            st = _get_streamlit()
+            st.session_state["drive_target_file_name"] = file_name
+            st.session_state["drive_target_modified_time"] = modified_time
+            st.session_state["drive_target_status"] = "使用本地缓存"
+            st.session_state["drive_target_year"] = parsed.target_year
+        rows = 0 if parsed.company_targets is None else len(parsed.company_targets)
+        _perf_log("restore_target_cache", start, rows, "hit")
+        return True
+    except Exception:
+        logger.exception("Local target cache restore failed")
+        _perf_log("restore_target_cache", start, cache="corrupt")
+        return False
+
+
+def _write_target_cache(metadata: DriveFileMetadata, parsed: XFTargetWorkbook) -> None:
+    start = _timer()
+    try:
+        _ensure_cache_dir()
+        with CACHE_TARGETS_PATH.open("wb") as handle:
+            pickle.dump(parsed, handle)
+        cache_metadata = _read_cache_metadata()
+        cache_metadata.update(
+            {
+                "cache_version": DRIVE_CACHE_VERSION,
+                "target_file_id": metadata.file_id,
+                "target_modified_time": metadata.modified_time,
+                "target_file_name": metadata.name,
+                "target_size": metadata.size,
+                "cache_created_at": _now_text(),
+            }
+        )
+        _write_cache_metadata(cache_metadata)
+        rows = 0 if parsed.company_targets is None else len(parsed.company_targets)
+        _perf_log("write_target_cache", start, rows, "miss")
+    except Exception:
+        logger.exception("Local target cache write failed")
+
+
+def _restore_any_local_cache() -> DriveLoadStatus | None:
+    metadata = _read_cache_metadata()
+    if metadata.get("cache_version") != DRIVE_CACHE_VERSION:
+        return None
+    sales_metadata = None
+    if metadata.get("sales_file_id") and metadata.get("sales_file_name"):
+        sales_metadata = DriveFileMetadata(
+            file_id=str(metadata.get("sales_file_id")),
+            name=str(metadata.get("sales_file_name")),
+            modified_time=metadata.get("sales_modified_time"),
+            size=metadata.get("sales_size"),
+        )
+    target_metadata = None
+    if metadata.get("target_file_id") and metadata.get("target_file_name"):
+        target_metadata = DriveFileMetadata(
+            file_id=str(metadata.get("target_file_id")),
+            name=str(metadata.get("target_file_name")),
+            modified_time=metadata.get("target_modified_time"),
+            size=metadata.get("target_size"),
+        )
+    sales_ok = _restore_sales_cache(sales_metadata)
+    target_ok = _restore_target_cache(target_metadata)
+    if not sales_ok and not target_ok:
+        return None
+    sales_status = DriveLoadItemStatus(
+        "cached" if sales_ok else "failed",
+        "销售数据已从本地缓存加载。" if sales_ok else "本地销售缓存不可用。",
+        metadata.get("sales_file_name"),
+        metadata.get("sales_modified_time"),
+        metadata.get("sales_file_id"),
+    )
+    target_status = DriveLoadItemStatus(
+        "cached" if target_ok else "failed",
+        "目标数据已从本地缓存加载。" if target_ok else "本地目标缓存不可用。",
+        metadata.get("target_file_name"),
+        metadata.get("target_modified_time"),
+        metadata.get("target_file_id"),
+    )
+    return DriveLoadStatus(True, "当前使用本地缓存数据。", sales_status, target_status)
+
+
 def _get_streamlit():
     import streamlit as st
 
@@ -132,6 +352,7 @@ def get_drive_config(secrets: Any | None = None) -> DriveConfig:
     )
 
 
+@st.cache_resource(show_spinner=False)
 def get_drive_service(config: DriveConfig):
     try:
         from google.auth.exceptions import RefreshError
@@ -630,15 +851,20 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
 
     current_id = st.session_state.get("drive_sales_file_id")
     current_modified = st.session_state.get("drive_sales_modified_time")
+    latest_metadata = candidates[0].metadata
     if (
-        force
-        and st.session_state.get("clean_data") is not None
+        st.session_state.get("clean_data") is not None
         and current_id
         and current_modified
-        and candidates[0].metadata.file_id == current_id
-        and candidates[0].metadata.modified_time == current_modified
+        and latest_metadata.file_id == current_id
+        and latest_metadata.modified_time == current_modified
     ):
-        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", candidates[0].metadata.name, candidates[0].metadata.modified_time, candidates[0].metadata.file_id)
+        st.session_state["drive_sales_status"] = "已是最新"
+        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", latest_metadata.name, latest_metadata.modified_time, latest_metadata.file_id)
+
+    cache_metadata = _read_cache_metadata()
+    if _cache_matches("sales", latest_metadata, cache_metadata) and _restore_sales_cache(latest_metadata):
+        return DriveLoadItemStatus("cached", "销售数据已从本地缓存加载。", latest_metadata.name, latest_metadata.modified_time, latest_metadata.file_id)
 
     failures: list[str] = []
     for candidate in candidates:
@@ -663,6 +889,7 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
         st.session_state["sales_drive_file_id"] = metadata.file_id
         st.session_state["sales_drive_modified_time"] = metadata.modified_time
         _set_drive_sales_success(metadata, result, candidate.reason, candidates)
+        _write_sales_cache(metadata, result)
         logger.info("Google Drive sales selected file=%s reason=%s", metadata.name, candidate.reason)
         return DriveLoadItemStatus("loaded", "销售数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
 
@@ -697,15 +924,20 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
 
     current_id = st.session_state.get("drive_target_file_id")
     current_modified = st.session_state.get("drive_target_modified_time")
+    latest_metadata = candidates[0].metadata
     if (
-        force
-        and st.session_state.get("target_data") is not None
+        st.session_state.get("target_data") is not None
         and current_id
         and current_modified
-        and candidates[0].metadata.file_id == current_id
-        and candidates[0].metadata.modified_time == current_modified
+        and latest_metadata.file_id == current_id
+        and latest_metadata.modified_time == current_modified
     ):
-        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", candidates[0].metadata.name, candidates[0].metadata.modified_time, candidates[0].metadata.file_id)
+        st.session_state["drive_target_status"] = "已是最新"
+        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", latest_metadata.name, latest_metadata.modified_time, latest_metadata.file_id)
+
+    cache_metadata = _read_cache_metadata()
+    if _cache_matches("target", latest_metadata, cache_metadata) and _restore_target_cache(latest_metadata):
+        return DriveLoadItemStatus("cached", "目标数据已从本地缓存加载。", latest_metadata.name, latest_metadata.modified_time, latest_metadata.file_id)
 
     failures: list[str] = []
     for candidate in candidates:
@@ -731,6 +963,7 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
         st.session_state["target_drive_modified_time"] = metadata.modified_time
         reason = _target_selection_reason(candidate, analysis_year)
         _set_drive_target_success(metadata, parsed, reason, candidates)
+        _write_target_cache(metadata, parsed)
         logger.info("Google Drive target selected file=%s reason=%s", metadata.name, reason)
         return DriveLoadItemStatus("loaded", "目标数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
 
@@ -747,6 +980,14 @@ def _status_from_error(message: str) -> DriveLoadItemStatus:
 
 def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
     st = _get_streamlit()
+    start = _timer()
+    if not force and st.session_state.get("clean_data") is None:
+        cached = _restore_any_local_cache()
+        if cached is not None:
+            st.session_state["drive_load_status"] = cached
+            _perf_log("load_drive_business_files", start, len(st.session_state.get("clean_data", [])), "local-cache")
+            return cached
+
     try:
         config = get_drive_config()
     except DriveUserError as exc:
@@ -762,6 +1003,17 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
     try:
         service = get_drive_service(config)
     except DriveUserError as exc:
+        cached = _restore_any_local_cache()
+        if cached is not None:
+            cached = DriveLoadStatus(
+                configured=True,
+                message="Google Drive 暂时无法访问，当前继续使用缓存数据。",
+                sales=cached.sales,
+                targets=cached.targets,
+            )
+            st.session_state["drive_load_status"] = cached
+            _perf_log("load_drive_business_files", start, len(st.session_state.get("clean_data", [])), "drive-failed-cache-hit")
+            return cached
         status = DriveLoadStatus(
             configured=True,
             message=str(exc),
@@ -788,6 +1040,7 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
         targets=target_status,
     )
     st.session_state["drive_load_status"] = status
+    _perf_log("load_drive_business_files", start, len(st.session_state.get("clean_data", [])) if st.session_state.get("clean_data") is not None else None, "drive")
     return status
 
 

@@ -295,20 +295,12 @@ def _customer_profile(history_df: pd.DataFrame, anchor: pd.Timestamp | None = No
         )
     )
 
-    latest = (
-        valid.sort_values("Performance Date")
-        .groupby("Customer Code", dropna=False)
-        .apply(
-            lambda group: pd.Series(
-                {
-                    "Customer Name": _latest_value(group, "Customer Name"),
-                    "Customer Type": _latest_value(group, "Customer Type"),
-                }
-            ),
-            include_groups=False,
-        )
-        .reset_index()
-    )
+    latest_columns = ["Customer Code"]
+    if "Customer Name" in valid.columns:
+        latest_columns.append("Customer Name")
+    if "Customer Type" in valid.columns:
+        latest_columns.append("Customer Type")
+    latest = valid.sort_values("Performance Date").drop_duplicates("Customer Code", keep="last")[latest_columns]
     profile = profile.merge(latest, on="Customer Code", how="left")
     gap_stats = (
         orders.groupby("Customer Code", dropna=False)["OrderDate"]
@@ -325,13 +317,16 @@ def _customer_profile(history_df: pd.DataFrame, anchor: pd.Timestamp | None = No
     profile.loc[valid_typical, "Expected Next Order Date"] = last_dates.loc[valid_typical] + pd.to_timedelta(typical.loc[valid_typical], unit="D")
     expected_dates = pd.to_datetime(profile["Expected Next Order Date"], errors="coerce").dt.normalize()
     profile["Days Overdue"] = (anchor.normalize() - expected_dates).dt.days.clip(lower=0)
-    profile["Interval Ratio"] = profile.apply(
-        lambda row: _safe_ratio(float(row["Days Since Last Order"]), float(row["Typical Order Interval Days"]))
-        if pd.notna(row["Typical Order Interval Days"]) and float(row["Typical Order Interval Days"]) > 0
-        else pd.NA,
-        axis=1,
-    )
-    profile["Interval Status"] = profile.apply(lambda row: _interval_status(row["Interval Ratio"], row["Historical Order Count"]), axis=1)
+    profile["Interval Ratio"] = pd.NA
+    profile.loc[valid_typical, "Interval Ratio"] = profile.loc[valid_typical, "Days Since Last Order"] / typical.loc[valid_typical]
+    ratio = pd.to_numeric(profile["Interval Ratio"], errors="coerce")
+    order_count = pd.to_numeric(profile["Historical Order Count"], errors="coerce")
+    profile["Interval Status"] = "数据不足"
+    stable_base = order_count.ge(CUSTOMER_MIN_ORDERS_FOR_INTERVAL) & ratio.notna()
+    profile.loc[stable_base & ratio.le(CUSTOMER_INTERVAL_NORMAL_RATIO), "Interval Status"] = "正常节奏"
+    profile.loc[stable_base & ratio.gt(CUSTOMER_INTERVAL_NORMAL_RATIO) & ratio.le(CUSTOMER_INTERVAL_WARNING_RATIO), "Interval Status"] = "轻度延迟"
+    profile.loc[stable_base & ratio.gt(CUSTOMER_INTERVAL_WARNING_RATIO) & ratio.le(CUSTOMER_INTERVAL_HIGH_RISK_RATIO), "Interval Status"] = "明显延迟"
+    profile.loc[stable_base & ratio.gt(CUSTOMER_INTERVAL_HIGH_RISK_RATIO), "Interval Status"] = "高风险延迟"
 
     if "ABC Class" in valid.columns and valid["ABC Class"].notna().any():
         abc = valid.sort_values("Performance Date").groupby("Customer Code", dropna=False)["ABC Class"].last().rename("ABC Class").reset_index()
@@ -351,7 +346,12 @@ def _customer_profile(history_df: pd.DataFrame, anchor: pd.Timestamp | None = No
     return profile, fallback_used
 
 
-def new_customer_table(current_df: pd.DataFrame, history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
+def new_customer_table(
+    current_df: pd.DataFrame,
+    history_df: pd.DataFrame,
+    anchor: pd.Timestamp,
+    profile: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     if anchor.to_period("M") < pd.Timestamp(NEW_CUSTOMER_START_DATE).to_period("M"):
         return pd.DataFrame()
     current = _valid_customer_data(current_df)
@@ -382,7 +382,8 @@ def new_customer_table(current_df: pd.DataFrame, history_df: pd.DataFrame, ancho
         .agg(当月累计销售额=("Sales Amount", "sum"), 当月订单数=("Order No.", "nunique"))
         .reset_index()
     )
-    profile, _ = _customer_profile(history)
+    if profile is None:
+        profile, _ = _customer_profile(history)
     return (
         new_codes.merge(profile[["Customer Code", "Customer Name", "Customer Type"]], on="Customer Code", how="left")
         .merge(first_order_sales, on="Customer Code", how="left")
@@ -394,8 +395,9 @@ def new_customer_table(current_df: pd.DataFrame, history_df: pd.DataFrame, ancho
     ]
 
 
-def dormant_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
-    profile, _ = _customer_profile(history_df, anchor)
+def dormant_customers(history_df: pd.DataFrame, anchor: pd.Timestamp, profile: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if profile is None:
+        profile, _ = _customer_profile(history_df, anchor)
     if profile.empty:
         return pd.DataFrame(), pd.DataFrame()
     result = profile.copy()
@@ -433,8 +435,9 @@ def dormant_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> tuple[p
     return dormant_30[base_columns], dormant_90[base_columns]
 
 
-def dormant_or_lost_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
-    profile, _ = _customer_profile(history_df, anchor)
+def dormant_or_lost_customers(history_df: pd.DataFrame, anchor: pd.Timestamp, profile: pd.DataFrame | None = None) -> pd.DataFrame:
+    if profile is None:
+        profile, _ = _customer_profile(history_df, anchor)
     if profile.empty:
         return pd.DataFrame()
     result = profile.copy()
@@ -449,18 +452,11 @@ def dormant_or_lost_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) ->
     if result.empty:
         return pd.DataFrame()
 
-    def dormancy_status(days: int, ratio: float | None) -> str:
-        if days > 365:
-            return "长期流失/待清理"
-        if days > 180:
-            return "高流失风险"
-        if days > CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER:
-            return "沉睡"
-        if pd.notna(ratio) and float(ratio) > CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO:
-            return "节奏严重偏离"
-        return "沉睡"
-
-    result["沉睡状态"] = result.apply(lambda row: dormancy_status(int(row["未下单天数"]), row["_interval_ratio"]), axis=1)
+    result["沉睡状态"] = "沉睡"
+    result.loc[result["_interval_ratio"].gt(CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO), "沉睡状态"] = "节奏严重偏离"
+    result.loc[result["未下单天数"].gt(CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER), "沉睡状态"] = "沉睡"
+    result.loc[result["未下单天数"].gt(180), "沉睡状态"] = "高流失风险"
+    result.loc[result["未下单天数"].gt(365), "沉睡状态"] = "长期流失/待清理"
     result["Health Status"] = "长期沉睡"
     result["Trend Direction"] = "稳定"
     result["风险类型"] = result["沉睡状态"]
@@ -509,7 +505,7 @@ def _window_orders(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> 
     return df.loc[mask].groupby("Customer Code", dropna=False)["Order No."].nunique()
 
 
-def value_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
+def value_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp, profile: pd.DataFrame | None = None) -> pd.DataFrame:
     valid = _valid_customer_data(history_df)
     if valid.empty:
         return pd.DataFrame()
@@ -519,7 +515,10 @@ def value_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> p
     previous = _window_sales(valid, previous_start, previous_end).rename("前4周销售额")
     table = pd.concat([recent, previous], axis=1).fillna(0.0).reset_index()
     table["绝对下降金额"] = table["前4周销售额"] - table["最近4周销售额"]
-    table["下降比例"] = table.apply(lambda row: _safe_ratio(row["绝对下降金额"], row["前4周销售额"]), axis=1)
+    table["下降比例"] = pd.NA
+    base = pd.to_numeric(table["前4周销售额"], errors="coerce")
+    valid_base = base.gt(0)
+    table.loc[valid_base, "下降比例"] = table.loc[valid_base, "绝对下降金额"] / base.loc[valid_base]
     table = table[
         table["前4周销售额"].gt(0)
         & table["绝对下降金额"].ge(CUSTOMER_VALUE_DECLINE_MIN_AMOUNT)
@@ -527,7 +526,8 @@ def value_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> p
     ].copy()
     if table.empty:
         return pd.DataFrame()
-    profile, _ = _customer_profile(valid, anchor)
+    if profile is None:
+        profile, _ = _customer_profile(valid, anchor)
     table = table.merge(profile[["Customer Code", "Customer Name", "Customer Type", "ABC Class", "最近下单日期", "历史累计销售额"]], on="Customer Code", how="left")
     table["风险类型"] = "采购金额下降"
     return table[
@@ -547,7 +547,7 @@ def value_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> p
     ]
 
 
-def frequency_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
+def frequency_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp, profile: pd.DataFrame | None = None) -> pd.DataFrame:
     valid = _valid_customer_data(history_df)
     if valid.empty:
         return pd.DataFrame()
@@ -557,14 +557,18 @@ def frequency_decline_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) 
     previous = _window_orders(valid, previous_start, previous_end).rename("前8周订单数")
     table = pd.concat([recent, previous], axis=1).fillna(0).reset_index()
     table["订单数变化"] = table["最近8周订单数"] - table["前8周订单数"]
-    table["频次变化率"] = table.apply(lambda row: _safe_ratio(row["订单数变化"], row["前8周订单数"]), axis=1)
+    table["频次变化率"] = pd.NA
+    base = pd.to_numeric(table["前8周订单数"], errors="coerce")
+    valid_base = base.gt(0)
+    table.loc[valid_base, "频次变化率"] = table.loc[valid_base, "订单数变化"] / base.loc[valid_base]
     table = table[
         table["前8周订单数"].ge(CUSTOMER_FREQUENCY_MIN_BASE_ORDERS)
         & table["频次变化率"].le(-CUSTOMER_FREQUENCY_DECLINE_THRESHOLD)
     ].copy()
     if table.empty:
         return pd.DataFrame()
-    profile, _ = _customer_profile(valid, anchor)
+    if profile is None:
+        profile, _ = _customer_profile(valid, anchor)
     table = table.merge(profile[["Customer Code", "Customer Name", "Customer Type", "ABC Class", "最近下单日期", "历史累计销售额"]], on="Customer Code", how="left")
     table["风险类型"] = "下单频次下降"
     return table[
@@ -626,8 +630,9 @@ def _priority_for_row(row: pd.Series) -> str:
     return "低优先级"
 
 
-def interval_delay_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
-    profile, _ = _customer_profile(history_df, anchor)
+def interval_delay_customers(history_df: pd.DataFrame, anchor: pd.Timestamp, profile: pd.DataFrame | None = None) -> pd.DataFrame:
+    if profile is None:
+        profile, _ = _customer_profile(history_df, anchor)
     if profile.empty:
         return pd.DataFrame()
     delayed = profile[
@@ -664,7 +669,7 @@ def interval_delay_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> 
     ]
 
 
-def improvement_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
+def improvement_customers(history_df: pd.DataFrame, anchor: pd.Timestamp, profile: pd.DataFrame | None = None) -> pd.DataFrame:
     valid = _valid_customer_data(history_df)
     if valid.empty:
         return pd.DataFrame()
@@ -676,10 +681,17 @@ def improvement_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.
     orders_previous = _window_orders(valid, previous8_start, previous8_end).rename("前8周订单数")
     table = pd.concat([sales_recent, sales_previous, orders_recent, orders_previous], axis=1).fillna(0).reset_index()
     table["金额增长"] = table["最近4周销售额"] - table["前4周销售额"]
-    table["金额增长率"] = table.apply(lambda row: _safe_ratio(row["金额增长"], row["前4周销售额"]), axis=1)
+    table["金额增长率"] = pd.NA
+    value_base = pd.to_numeric(table["前4周销售额"], errors="coerce")
+    valid_value_base = value_base.gt(0)
+    table.loc[valid_value_base, "金额增长率"] = table.loc[valid_value_base, "金额增长"] / value_base.loc[valid_value_base]
     table["订单增长"] = table["最近8周订单数"] - table["前8周订单数"]
-    table["订单增长率"] = table.apply(lambda row: _safe_ratio(row["订单增长"], row["前8周订单数"]), axis=1)
-    profile, _ = _customer_profile(valid, anchor)
+    table["订单增长率"] = pd.NA
+    order_base = pd.to_numeric(table["前8周订单数"], errors="coerce")
+    valid_order_base = order_base.gt(0)
+    table.loc[valid_order_base, "订单增长率"] = table.loc[valid_order_base, "订单增长"] / order_base.loc[valid_order_base]
+    if profile is None:
+        profile, _ = _customer_profile(valid, anchor)
     table = table.merge(
         profile[
             [
@@ -705,34 +717,24 @@ def improvement_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.
         how="left",
     )
 
-    def improvement_type(row: pd.Series) -> str | None:
-        value_improved = (
-            pd.notna(row["金额增长率"])
-            and row["金额增长率"] >= CUSTOMER_VALUE_IMPROVEMENT_THRESHOLD
-            and row["金额增长"] >= CUSTOMER_VALUE_IMPROVEMENT_MIN_AMOUNT
-        )
-        frequency_improved = (
-            row["前8周订单数"] > 0
-            and pd.notna(row["订单增长率"])
-            and row["订单增长率"] >= CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD
-        )
-        recovered = (
-            pd.notna(row["Interval Ratio"])
-            and row["Interval Ratio"] <= CUSTOMER_INTERVAL_NORMAL_RATIO
-            and row["Historical Order Count"] >= CUSTOMER_MIN_ORDERS_FOR_INTERVAL
-        )
-        stable = row["Interval Status"] == "正常节奏" and not value_improved and not frequency_improved
-        if recovered:
-            return "节奏恢复"
-        if value_improved:
-            return "金额改善"
-        if frequency_improved:
-            return "频次改善"
-        if stable:
-            return "无"
-        return None
-
-    table["Improvement Type"] = table.apply(improvement_type, axis=1)
+    value_improved = (
+        pd.to_numeric(table["金额增长率"], errors="coerce").ge(CUSTOMER_VALUE_IMPROVEMENT_THRESHOLD)
+        & pd.to_numeric(table["金额增长"], errors="coerce").ge(CUSTOMER_VALUE_IMPROVEMENT_MIN_AMOUNT)
+    )
+    frequency_improved = (
+        pd.to_numeric(table["前8周订单数"], errors="coerce").gt(0)
+        & pd.to_numeric(table["订单增长率"], errors="coerce").ge(CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD)
+    )
+    recovered = (
+        pd.to_numeric(table["Interval Ratio"], errors="coerce").le(CUSTOMER_INTERVAL_NORMAL_RATIO)
+        & pd.to_numeric(table["Historical Order Count"], errors="coerce").ge(CUSTOMER_MIN_ORDERS_FOR_INTERVAL)
+    )
+    stable = table["Interval Status"].eq("正常节奏") & ~value_improved & ~frequency_improved
+    table["Improvement Type"] = None
+    table.loc[stable, "Improvement Type"] = "无"
+    table.loc[frequency_improved, "Improvement Type"] = "频次改善"
+    table.loc[value_improved, "Improvement Type"] = "金额改善"
+    table.loc[recovered, "Improvement Type"] = "节奏恢复"
     table = table[table["Improvement Type"].notna() & ~table["Improvement Type"].eq("无")].copy()
     if table.empty:
         return pd.DataFrame()
@@ -758,8 +760,10 @@ def merge_risk_customers(
     frequency_decline: pd.DataFrame,
     interval_delay: pd.DataFrame,
     improving: pd.DataFrame,
+    profile: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    profile, _ = _customer_profile(history_df, anchor)
+    if profile is None:
+        profile, _ = _customer_profile(history_df, anchor)
     if profile.empty:
         return pd.DataFrame()
     risk_frames = []
@@ -951,16 +955,16 @@ def build_customer_health(current_df: pd.DataFrame, history_df: pd.DataFrame) ->
         return CustomerHealthResult(empty_active, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), excluded, False)
 
     active = active_customer_metrics(valid_history, anchor)
-    new_customers = new_customer_table(valid_current, valid_history, anchor)
-    dormant_30, dormant_90 = dormant_customers(valid_history, anchor)
-    dormant_lost = dormant_or_lost_customers(valid_history, anchor)
-    value_decline = value_decline_customers(valid_history, anchor)
-    frequency_decline = frequency_decline_customers(valid_history, anchor)
-    interval_delay = interval_delay_customers(valid_history, anchor)
-    improving = improvement_customers(valid_history, anchor)
-    risk = merge_risk_customers(valid_history, anchor, dormant_30, dormant_90, value_decline, frequency_decline, interval_delay, improving)
+    profile, abc_fallback = _customer_profile(valid_history, anchor)
+    new_customers = new_customer_table(valid_current, valid_history, anchor, profile)
+    dormant_30, dormant_90 = dormant_customers(valid_history, anchor, profile)
+    dormant_lost = dormant_or_lost_customers(valid_history, anchor, profile)
+    value_decline = value_decline_customers(valid_history, anchor, profile)
+    frequency_decline = frequency_decline_customers(valid_history, anchor, profile)
+    interval_delay = interval_delay_customers(valid_history, anchor, profile)
+    improving = improvement_customers(valid_history, anchor, profile)
+    risk = merge_risk_customers(valid_history, anchor, dormant_30, dormant_90, value_decline, frequency_decline, interval_delay, improving, profile)
     follow_up = follow_up_customers(risk, dormant_lost)
-    _, abc_fallback = _customer_profile(valid_history, anchor)
     return CustomerHealthResult(
         active_metrics=active,
         new_customers=new_customers,
