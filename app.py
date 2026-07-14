@@ -12,10 +12,11 @@ from app.google_drive import (
     store_target_workbook_in_session,
 )
 from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook, workbook_looks_like_sales_data
-from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_filters
+from app.ui import bar_chart, donut_chart, inject_global_styles, line_chart, metric_row, section_header, show_code_warning, show_filters
 
 
 st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout="wide")
+inject_global_styles()
 
 st.title("鲜锋经营驾驶舱")
 st.caption("XF Business Performance Dashboard")
@@ -89,7 +90,7 @@ if quality:
 render_business_dashboard(filtered)
 st.divider()
 
-st.subheader("趋势和结构")
+section_header("趋势和结构")
 
 monthly = monthly_sales(filtered)
 left, right = st.columns([1.4, 1])

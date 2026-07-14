@@ -2,10 +2,11 @@ import streamlit as st
 
 from app.data import monthly_sales, top_entity_table, top_table
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
-from app.ui import bar_chart, line_chart, metric_row, show_code_warning, show_context_summary, show_filters
+from app.ui import bar_chart, inject_global_styles, line_chart, metric_row, section_header, show_code_warning, show_context_summary, show_filters
 
 
 st.set_page_config(page_title="产品分析", layout="wide")
+inject_global_styles()
 st.title("产品分析")
 st.caption("查看产品组、重点产品和购买客户表现")
 
@@ -35,7 +36,7 @@ with right:
         top_products = top_table(filtered, "Product", 20)
         st.plotly_chart(bar_chart(top_products.sort_values("Sales Amount"), "Sales Amount", "Product", "Top Product", "h"), width="stretch")
 
-st.subheader("单产品趋势")
+section_header("单产品趋势")
 product_dimension = "Product Key" if "Product Key" in filtered.columns else "Product"
 label_dimension = "Product Label" if "Product Label" in filtered.columns else product_dimension
 product_options = filtered[[product_dimension, label_dimension]].dropna().drop_duplicates().sort_values(label_dimension)

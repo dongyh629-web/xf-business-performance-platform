@@ -7,7 +7,7 @@ from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
 from app.customer_metrics import abc_distribution, build_customer_summary, concentration_metrics
 from app.data import monthly_sales, top_entity_table, top_table
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
-from app.ui import bar_chart, date_text, days, donut_chart, line_chart, metric_cards, metric_row, money, percent, show_code_warning, show_context_summary, show_filters
+from app.ui import bar_chart, date_text, days, donut_chart, inject_global_styles, line_chart, metric_cards, metric_row, money, percent, section_header, show_code_warning, show_context_summary, show_filters
 
 
 def money_or_na(value) -> str:
@@ -22,6 +22,7 @@ def percent_or_na(value) -> str:
     return f"{float(value):.1%}"
 
 st.set_page_config(page_title="客户分析", layout="wide")
+inject_global_styles()
 st.title("客户分析")
 st.caption("Customer Intelligence")
 st.caption("了解客户贡献、结构和购买表现")
@@ -70,7 +71,7 @@ with right:
     customer_types = top_table(filtered, "Customer Type", 20)
     st.plotly_chart(donut_chart(customer_types, "Customer Type", "Sales Amount", "客户类型销售占比"), width="stretch")
 
-st.subheader("客户集中度与 ABC 分类")
+section_header("客户集中度与 ABC 分类")
 st.caption(f"ABC 分类：A 类累计贡献至 {ABC_A_THRESHOLD:.0%}，B 类超过 {ABC_A_THRESHOLD:.0%} 至 {ABC_B_THRESHOLD:.0%}，C 类超过 {ABC_B_THRESHOLD:.0%}。该等级基于当前筛选动态计算，不代表永久客户等级。")
 
 abc = abc_distribution(customer_summary)
@@ -88,7 +89,7 @@ with right:
     )
     st.dataframe(abc, width="stretch", hide_index=True)
 
-st.subheader("客户汇总表")
+section_header("客户汇总表")
 st.caption("Customer Summary Table。表格筛选仅影响本表，不改变页面顶部 KPI、ABC 分布或全局筛选。同比增长按当前筛选范围内最近年份与前一年销售额计算；月度趋势基于当前日期口径。")
 
 if customer_summary.empty:
@@ -216,7 +217,7 @@ else:
             },
         )
 
-st.subheader("单客户详情")
+section_header("单客户详情")
 customer_dimension = "Customer Key" if "Customer Key" in filtered.columns else "Customer"
 label_dimension = "Customer Label" if "Customer Label" in filtered.columns else customer_dimension
 customer_options = filtered[[customer_dimension, label_dimension]].dropna().drop_duplicates().sort_values(label_dimension)

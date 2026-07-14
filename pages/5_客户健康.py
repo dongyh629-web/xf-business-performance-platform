@@ -13,7 +13,7 @@ from app.customer_health import (
 )
 from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
-from app.ui import money, percent, show_code_warning, show_context_summary, show_filters
+from app.ui import inject_global_styles, kpi_grid, money, percent, section_header, show_code_warning, show_context_summary, show_filters
 
 
 def _format_percent(value: float | None) -> str:
@@ -84,6 +84,8 @@ def _scope_text(filtered: pd.DataFrame) -> str:
 
 def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
     display = df.copy()
+    if "Suggested Action" not in display.columns:
+        display["Suggested Action"] = display.apply(_suggested_action, axis=1)
     for column in ["最近下单日期", "Expected Next Order Date"]:
         if column in display.columns:
             display[column] = display[column].map(_format_date)
@@ -121,6 +123,7 @@ def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
             "Interval Status": "节奏状态",
             "Historical Order Count": "历史订单数",
             "Recent 6 Months Order Count": "近6个月订单数",
+            "Suggested Action": "建议动作",
         }
     )
     return display.loc[:, ~display.columns.duplicated()]
@@ -189,7 +192,23 @@ def _days_overdue_text(row: pd.Series) -> str:
     return f"{float(days):.0f} 天"
 
 
+def _suggested_action(row: pd.Series) -> str:
+    priority = str(row.get("风险等级", ""))
+    risks = str(row.get("风险类型", ""))
+    trend = str(row.get("Trend Direction", ""))
+    if priority == "高优先级":
+        return "优先联系"
+    if "采购金额下降" in risks:
+        return "确认库存或价格问题"
+    if "下单频次下降" in risks or "下单节奏延迟" in risks:
+        return "观察采购节奏"
+    if "改善" in trend or "恢复" in trend:
+        return "维护关系"
+    return "暂不处理"
+
+
 st.set_page_config(page_title="客户健康", layout="wide")
+inject_global_styles()
 st.title("客户健康")
 st.caption("Customer Health")
 st.caption("哪些客户正在下滑、沉睡或需要销售跟进？")
@@ -227,7 +246,7 @@ if result.excluded_missing_customer_code:
 if result.abc_fallback_used:
     st.info("当前销售数据没有可直接复用的 ABC Class 字段，客户健康按历史销售额贡献临时计算 ABC 优先级。")
 
-st.subheader("今日待跟进")
+section_header("今日待跟进", "近期异常且仍适合销售跟进的客户。")
 st.caption("Customers to Follow Up")
 if result.follow_up.empty:
     st.info("当前筛选范围内暂无近期异常且仍适合今天跟进的客户。长期未下单客户已归入“长期沉睡或可能流失”。")
@@ -257,30 +276,37 @@ else:
                 f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
             )
 
-st.subheader("客户健康 KPI")
+section_header("客户健康 KPI", "按核心经营状态、风险诊断分层展示。")
 active = result.active_metrics
-metric_cols = st.columns(4)
-metric_cols[0].metric("当月活跃客户", f"{active.current_active:,}")
-metric_cols[1].metric("活跃客户同比", _format_percent(active.yoy))
-metric_cols[2].metric("活跃客户环比", _format_percent(active.mom))
 if anchor.to_period("M") < pd.Timestamp(NEW_CUSTOMER_START_DATE).to_period("M"):
     new_customer_text = "自 2026-07 起统计"
 else:
     new_customer_text = f"{len(result.new_customers):,}"
-metric_cols[3].metric("本月新客户", new_customer_text)
+high_risk_count = int(result.risk_customers["风险等级"].eq("高优先级").sum()) if not result.risk_customers.empty else 0
+kpi_grid(
+    [
+        {"label": "当月活跃客户", "value": f"{active.current_active:,}", "delta": _format_percent(active.mom), "caption": "环比变化"},
+        {"label": "今日可跟进客户", "value": f"{len(result.follow_up):,}", "caption": "近期异常且可挽回"},
+        {"label": "高风险客户", "value": f"{high_risk_count:,}", "caption": "优先联系"},
+        {"label": "近期改善客户", "value": f"{len(result.improving_customers):,}", "caption": "恢复或改善"},
+    ],
+    columns=4,
+)
+kpi_grid(
+    [
+        {"label": "长期沉睡客户", "value": f"{len(result.dormant_lost_customers):,}", "caption": "单独复盘"},
+        {"label": "30天未下单客户", "value": f"{len(result.dormant_30):,}", "caption": "辅助标签"},
+        {"label": "90天未下单客户", "value": f"{len(result.dormant_90):,}", "caption": "沉睡观察"},
+        {"label": "金额下降客户", "value": f"{len(result.value_decline):,}", "caption": "采购金额下降"},
+        {"label": "频次下降客户", "value": f"{len(result.frequency_decline):,}", "caption": "订单频次下降"},
+        {"label": "本月新客户", "value": new_customer_text, "caption": "首次下单"},
+        {"label": "活跃客户同比", "value": _format_percent(active.yoy), "caption": "去年同期"},
+        {"label": "活跃客户环比", "value": _format_percent(active.mom), "caption": "上月同期"},
+    ],
+    columns=4,
+)
 
-metric_cols = st.columns(5)
-metric_cols[0].metric("今日可跟进客户", f"{len(result.follow_up):,}")
-metric_cols[1].metric("长期沉睡客户", f"{len(result.dormant_lost_customers):,}")
-metric_cols[2].metric("近期改善客户", f"{len(result.improving_customers):,}")
-metric_cols[3].metric("30天未下单客户", f"{len(result.dormant_30):,}")
-metric_cols[4].metric("90天未下单客户", f"{len(result.dormant_90):,}")
-
-metric_cols = st.columns(2)
-metric_cols[0].metric("金额下降客户", f"{len(result.value_decline):,}")
-metric_cols[1].metric("频次下降客户", f"{len(result.frequency_decline):,}")
-
-st.subheader("风险客户名单")
+section_header("风险客户行动表", "在风险原因后给出规则型建议动作。")
 risk_table = result.risk_customers.copy()
 if risk_table.empty:
     st.info("当前没有风险客户。")

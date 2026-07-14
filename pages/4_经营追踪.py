@@ -24,7 +24,7 @@ from app.tracking_metrics import (
     build_product_group_amount_tracking,
     build_product_group_case_tracking,
 )
-from app.ui import money, percent, show_code_warning, show_context_summary, show_filters
+from app.ui import inject_global_styles, money, percent, section_header, show_code_warning, show_context_summary, show_filters
 
 
 def _format_percent(value: float | None) -> str:
@@ -312,6 +312,7 @@ def _build_tracking_report(
 
 
 st.set_page_config(page_title="经营追踪", layout="wide")
+inject_global_styles()
 st.title("经营追踪")
 st.caption("Business Tracking")
 
@@ -320,10 +321,10 @@ render_data_source_sidebar(show_uploaders=False)
 
 df = st.session_state.get("clean_data")
 
-st.subheader("数据状态")
+section_header("数据状态")
 _show_data_status(df)
 
-st.subheader("上传目标表 / Upload Targets Excel")
+section_header("上传目标表 / Upload Targets Excel")
 uploaded_target = st.file_uploader("上传目标表 / Upload Targets Excel", type=["xlsx"], key="target_excel_upload")
 if uploaded_target is not None:
     target_bytes = uploaded_target.getvalue()
@@ -370,7 +371,7 @@ target_df = st.session_state.get("target_data")
 current_year = analysis_year(df) if df is not None else None
 fallback_year = current_year or datetime.now().year
 
-st.subheader("目标管理 / Target Management")
+section_header("目标管理 / Target Management")
 st.caption("Original Target 可由 Google Drive 或手动上传导入；Revised Target 仅在当前会话中调整，不会写回 Google Drive。")
 available_years = _target_years(target_df, fallback_year)
 default_year_index = available_years.index(current_year) if current_year in available_years else 0
@@ -477,7 +478,7 @@ if annual_target_from_file is not None:
     if abs(diff) > 0.01:
         st.warning(f"目标表年度总目标为 {money(annual_target_from_file)}，12个月调整后目标合计为 {money(summary.annual_target)}，差额 {money(diff)}。")
 
-st.subheader("年度追踪")
+section_header("年度追踪")
 kpi_cols = st.columns(5)
 kpi_cols[0].metric("年度目标", money(summary.annual_target))
 kpi_cols[1].metric("年度累计实际", money(summary.annual_actual))
@@ -485,7 +486,7 @@ kpi_cols[2].metric("年度累计完成率", _format_percent(summary.annual_compl
 kpi_cols[3].metric("年度累计同比", _format_percent(summary.annual_yoy))
 kpi_cols[4].metric("年度目标缺口", money(summary.annual_target_shortfall))
 
-st.subheader("月度目标追踪")
+section_header("月度目标追踪")
 display_table = _display_money_table(
     monthly_table,
     ["原始目标", "调整后目标", "实际销售", "去年同期", "Gap", "目标缺口", "累计实际", "累计目标"],
@@ -515,7 +516,7 @@ st.dataframe(
 amount_targets = st.session_state.get("target_amount_data")
 amount_table = build_product_group_amount_tracking(filtered, amount_targets, target_year) if amount_targets is not None else pd.DataFrame()
 if not amount_table.empty:
-    st.subheader("系列金额追踪")
+    section_header("系列金额追踪")
     amount_display = _display_money_table(
         amount_table,
         ["Original Amount Target", "Revised Amount Target", "Actual Sales Amount", "Amount Gap", "Previous Year Actual"],
@@ -526,11 +527,11 @@ if not amount_table.empty:
 case_targets = st.session_state.get("target_case_data")
 case_table = build_product_group_case_tracking(case_targets, target_year) if case_targets is not None else pd.DataFrame()
 if not case_table.empty:
-    st.subheader("系列数量目标")
+    section_header("系列数量目标")
     st.caption("实际箱数需要结合 SKU 箱规进一步计算，当前不使用订单数或销售行数代替。")
     st.dataframe(case_table, width="stretch", hide_index=True)
 
-st.subheader("后续月份平均分摊建议")
+section_header("后续月份平均分摊建议")
 st.caption("正式缺口只来自已结束月份的未完成部分；当前进行中月份暂不计入再分配，未来月份作为缺口承接月份。")
 st.metric("待补正式缺口", money(summary.formal_shortfall))
 allocation = average_allocation_table(monthly_table, summary.average_shortfall_allocation)
@@ -540,7 +541,7 @@ else:
     allocation_display = _display_money_table(allocation, ["当前调整后目标", "平均追加目标", "建议调整后目标"], [])
     st.dataframe(allocation_display, width="stretch", hide_index=True)
 
-st.subheader("下载经营追踪报告")
+section_header("下载经营追踪报告")
 try:
     report_bytes = _build_tracking_report(filtered, target_year, target_df, monthly_table, summary, amount_table, case_table, allocation)
     load_workbook(BytesIO(report_bytes), read_only=True)

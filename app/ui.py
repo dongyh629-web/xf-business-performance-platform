@@ -10,6 +10,87 @@ from app.config import DATE_BASIS_DESCRIPTIONS, DATE_BASIS_LABELS, DATE_BASIS_OP
 from app.data import apply_date_basis
 
 
+STATUS_COLORS = {
+    "green": ("#166534", "#e8f5ee", "#22c55e"),
+    "red": ("#991b1b", "#fde8e8", "#ef4444"),
+    "orange": ("#9a4b00", "#fff4e5", "#f59e0b"),
+    "yellow": ("#854d0e", "#fff9db", "#eab308"),
+    "gray": ("#4b5563", "#f3f4f6", "#9ca3af"),
+    "blue": ("#1d4ed8", "#eff6ff", "#2563eb"),
+}
+
+
+def inject_global_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {max-width: 1240px; padding-top: 1.4rem; padding-bottom: 3rem;}
+        div[data-testid="stMetric"] {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 14px 14px 12px 14px;
+            background: #ffffff;
+            min-height: 112px;
+        }
+        div[data-testid="stMetric"] label {color: #6b7280; font-size: 0.82rem;}
+        div[data-testid="stMetricValue"] {font-size: 1.55rem;}
+        div[data-testid="stDataFrame"] {border: 1px solid #e5e7eb; border-radius: 8px;}
+        .xf-section {margin-top: 1.6rem; margin-bottom: 0.6rem;}
+        .xf-section h3 {font-size: 1.05rem; margin-bottom: 0.15rem;}
+        .xf-section p {color: #6b7280; margin-top: 0;}
+        .xf-badge {display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 0.78rem; font-weight: 600;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_header(title: str, caption: str | None = None) -> None:
+    caption_html = f"<p>{caption}</p>" if caption else ""
+    st.markdown(f'<div class="xf-section"><h3>{title}</h3>{caption_html}</div>', unsafe_allow_html=True)
+
+
+def status_badge(label: str, tone: str = "gray") -> str:
+    color, background, _ = STATUS_COLORS.get(tone, STATUS_COLORS["gray"])
+    return f'<span class="xf-badge" style="color:{color}; background:{background};">{label}</span>'
+
+
+def status_style(value: object) -> str:
+    text = "" if pd.isna(value) else str(value)
+    if any(token in text for token in ["领先", "达标", "增长", "改善", "良好", "已连接", "绿色"]):
+        color, background, _ = STATUS_COLORS["green"]
+    elif any(token in text for token in ["高风险", "严重", "明显下降", "落后", "红色"]):
+        color, background, _ = STATUS_COLORS["red"]
+    elif any(token in text for token in ["关注", "轻度", "接近", "黄色", "橙色"]):
+        color, background, _ = STATUS_COLORS["orange"]
+    elif any(token in text for token in ["不足", "无同期", "未配置", "暂无", "灰色"]):
+        color, background, _ = STATUS_COLORS["gray"]
+    else:
+        return ""
+    return f"background-color: {background}; color: {color}; font-weight: 600;"
+
+
+def kpi_grid(metrics: list[dict[str, object]], columns: int = 4) -> None:
+    if not metrics:
+        return
+    for start in range(0, len(metrics), columns):
+        cols = st.columns(columns)
+        for idx, col in enumerate(cols):
+            item_index = start + idx
+            if item_index >= len(metrics):
+                col.empty()
+                continue
+            item = metrics[item_index]
+            col.metric(
+                str(item.get("label", "")),
+                str(item.get("value", "")),
+                delta=item.get("delta"),
+                help=item.get("help"),
+            )
+            if item.get("caption"):
+                col.caption(str(item["caption"]))
+
+
 def money(value: float) -> str:
     return f"£{value:,.0f}"
 
