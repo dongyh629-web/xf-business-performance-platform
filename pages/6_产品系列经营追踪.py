@@ -32,6 +32,17 @@ def _fmt_money(value) -> str:
     return money(float(value))
 
 
+def _fmt_signed_money(value) -> str:
+    if value is None or pd.isna(value):
+        return "未配置"
+    amount = float(value)
+    if amount > 0:
+        return f"+£{amount:,.0f}"
+    if amount < 0:
+        return f"-£{abs(amount):,.0f}"
+    return "£0"
+
+
 def _fmt_percent(value) -> str:
     if value is None or pd.isna(value):
         return "无基数"
@@ -135,6 +146,71 @@ def _style_overview(display: pd.DataFrame):
     return styler
 
 
+def _metric_tone(value: float | None, kind: str) -> str:
+    if value is None or pd.isna(value):
+        return "gray"
+    number = float(value)
+    if kind == "completion":
+        if number >= 1:
+            return "green"
+        if number >= 0.8:
+            return "soft-green"
+        if number >= 0.6:
+            return "yellow"
+        return "red"
+    if kind == "gap":
+        return "green" if number >= 0 else "red"
+    if kind == "yoy":
+        return "green" if number >= 0 else "red"
+    return "gray"
+
+
+def _tone_style(tone: str) -> str:
+    styles = {
+        "green": "color:#166534; background:#e8f5ee;",
+        "soft-green": "color:#166534; background:#f0fdf4;",
+        "yellow": "color:#854d0e; background:#fff9db;",
+        "red": "color:#991b1b; background:#fde8e8;",
+        "gray": "color:#4b5563; background:#f3f4f6;",
+    }
+    return styles.get(tone, styles["gray"])
+
+
+def _render_total_summary(table: pd.DataFrame) -> None:
+    current_sales = float(pd.to_numeric(table["本月销售额"], errors="coerce").fillna(0).sum())
+    previous_sales = float(pd.to_numeric(table["去年同期销售额"], errors="coerce").fillna(0).sum())
+    targets = pd.to_numeric(table["本月目标"], errors="coerce").dropna()
+    monthly_target = None if targets.empty else float(targets.sum())
+    completion = None if not monthly_target else current_sales / monthly_target
+    gap = None if monthly_target is None else current_sales - monthly_target
+    yoy = None if previous_sales == 0 else current_sales / previous_sales - 1
+
+    completion_style = _tone_style(_metric_tone(completion, "completion"))
+    gap_style = _tone_style(_metric_tone(gap, "gap"))
+    yoy_style = _tone_style(_metric_tone(yoy, "yoy"))
+    target_text = _fmt_money(monthly_target)
+    completion_text = "未配置" if completion is None else percent(completion)
+    gap_text = _fmt_signed_money(gap)
+    yoy_text = _fmt_percent(yoy)
+
+    st.markdown(
+        f"""
+        <div class="xf-total-row">
+            <div class="xf-total-title">系列总计</div>
+            <div class="xf-total-metrics">
+                <div><span>本月销售</span><strong>{_fmt_money(current_sales)}</strong></div>
+                <div><span>去年同期</span><strong>{_fmt_money(previous_sales)}</strong></div>
+                <div><span>本月目标</span><strong>{target_text}</strong></div>
+                <div><span>目标完成率</span><strong class="xf-total-pill" style="{completion_style}">{completion_text}</strong></div>
+                <div><span>距离目标</span><strong class="xf-total-pill" style="{gap_style}">{gap_text}</strong></div>
+                <div><span>本月同比</span><strong class="xf-total-pill" style="{yoy_style}">{yoy_text}</strong></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _range_label_options(df: pd.DataFrame) -> list[str]:
     values = df[RANGE_COLUMN].fillna("未分类").astype(str).drop_duplicates().sort_values().tolist()
     return ["全部"] + values
@@ -183,6 +259,60 @@ def _yoy_chart(trend: pd.DataFrame) -> go.Figure:
 
 st.set_page_config(page_title="产品系列经营追踪", layout="wide")
 inject_global_styles()
+st.markdown(
+    """
+    <style>
+    .xf-total-row {
+        border: 1px solid #dbe3ef;
+        border-radius: 8px;
+        background: #ffffff;
+        margin: 1rem 0 0.8rem 0;
+        padding: 12px 14px;
+    }
+    .xf-total-title {
+        color: #1f2937;
+        font-size: 0.92rem;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+    .xf-total-metrics {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(110px, 1fr));
+        gap: 10px;
+        align-items: stretch;
+    }
+    .xf-total-metrics div {
+        min-width: 0;
+        border-left: 1px solid #eef2f7;
+        padding-left: 10px;
+    }
+    .xf-total-metrics div:first-child {border-left: 0; padding-left: 0;}
+    .xf-total-metrics span {
+        display: block;
+        color: #6b7280;
+        font-size: 0.76rem;
+        line-height: 1.2;
+    }
+    .xf-total-metrics strong {
+        display: inline-block;
+        margin-top: 4px;
+        color: #111827;
+        font-size: 1.05rem;
+        line-height: 1.2;
+        white-space: nowrap;
+    }
+    .xf-total-pill {
+        border-radius: 6px;
+        padding: 3px 7px;
+    }
+    @media (max-width: 1000px) {
+        .xf-total-metrics {grid-template-columns: repeat(3, minmax(120px, 1fr));}
+        .xf-total-metrics div:nth-child(4) {border-left: 0; padding-left: 0;}
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("产品系列经营追踪")
 st.caption("Product Range Performance")
 
@@ -243,15 +373,7 @@ else:
     if selected_range != "全部":
         table = table[table["产品系列"].eq(selected_range)].copy()
 
-    configured_targets = table["本月目标"].notna() if "本月目标" in table.columns else pd.Series(dtype=bool)
-    st.caption(
-        f"本月销售 {_fmt_money(table['本月销售额'].sum())} | "
-        f"增长系列 {int(table['同比增长率'].gt(0).sum()):,} | "
-        f"下降系列 {int(table['同比增长率'].lt(0).sum()):,} | "
-        f"达标系列 {int(table['目标完成率'].ge(1).sum()):,} | "
-        f"需关注 {int(table['当前状态'].isin(['明显落后', '需要关注']).sum()):,} | "
-        f"未配置目标 {int((~configured_targets).sum()) if len(configured_targets) else 0:,}"
-    )
+    _render_total_summary(table)
 
     section_header("精简系列经营总览表")
     status_options = sorted(table["当前状态"].dropna().unique().tolist())
