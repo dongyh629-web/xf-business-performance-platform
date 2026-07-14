@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 DRIVE_SOURCE_LABEL = "Google Drive"
 MANUAL_SOURCE_LABEL = "本次会话手动上传"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+SALES_FOLDER_NAME = "sales data"
+TARGETS_FOLDER_NAME = "targets"
+TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 
 
 class DriveUserError(RuntimeError):
@@ -189,6 +192,67 @@ def find_drive_file(service, folder_id: str, file_name: str) -> DriveFileMetadat
     )
 
 
+def find_drive_folder(service, parent_folder_id: str, folder_name: str) -> DriveFileMetadata:
+    query = (
+        f"'{_escape_drive_query_value(parent_folder_id)}' in parents and "
+        f"name = '{_escape_drive_query_value(folder_name)}' and "
+        "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    )
+    try:
+        response = (
+            service.files()
+            .list(
+                q=query,
+                fields="files(id,name,mimeType,modifiedTime,webViewLink)",
+                pageSize=10,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora="allDrives",
+            )
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception("Google Drive folder lookup failed for folder_name=%s", folder_name)
+        raise DriveUserError("Google Drive 子文件夹查找失败，请检查文件夹权限。") from exc
+    folders = response.get("files", [])
+    if not folders:
+        raise DriveUserError(f"Google Drive 文件夹中未找到子文件夹：{folder_name}。")
+    folders = sorted(folders, key=lambda item: item.get("modifiedTime", ""), reverse=True)
+    item = folders[0]
+    return DriveFileMetadata(
+        file_id=str(item.get("id")),
+        name=str(item.get("name", folder_name)),
+        modified_time=item.get("modifiedTime"),
+        mime_type=item.get("mimeType"),
+        web_view_link=item.get("webViewLink"),
+    )
+
+
+def find_drive_file_in_folder_path(
+    service,
+    root_folder_id: str,
+    subfolder_name: str,
+    file_names: list[str],
+) -> DriveFileMetadata:
+    search_locations: list[tuple[str, str]] = []
+    try:
+        subfolder = find_drive_folder(service, root_folder_id, subfolder_name)
+        search_locations.append((subfolder.file_id, subfolder_name))
+    except DriveUserError as exc:
+        logger.info("Google Drive subfolder unavailable name=%s reason=%s", subfolder_name, exc.__class__.__name__)
+    search_locations.append((root_folder_id, "root"))
+
+    errors: list[str] = []
+    for folder_id, _label in search_locations:
+        for file_name in file_names:
+            try:
+                return find_drive_file(service, folder_id, file_name)
+            except DriveUserError as exc:
+                errors.append(str(exc))
+    names = " / ".join(file_names)
+    raise DriveUserError(f"Google Drive 中未找到文件：{subfolder_name}/{names}。")
+
+
 def get_drive_file_metadata(service, file_id: str) -> DriveFileMetadata:
     try:
         item = (
@@ -287,7 +351,7 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
         and st.session_state.get("clean_data") is not None
     ):
         return DriveLoadItemStatus("skipped", "当前会话已手动上传销售数据，优先使用手动上传。")
-    metadata = find_drive_file(service, config.folder_id, config.sales_file_name)
+    metadata = find_drive_file_in_folder_path(service, config.folder_id, SALES_FOLDER_NAME, [config.sales_file_name])
     content = download_drive_file(service, metadata.file_id).getvalue()
     try:
         result = import_excel(_NamedBytesIO(content, metadata.name))
@@ -310,7 +374,8 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
         and st.session_state.get("target_data") is not None
     ):
         return DriveLoadItemStatus("skipped", "当前会话已手动上传目标数据，优先使用手动上传。")
-    metadata = find_drive_file(service, config.folder_id, config.target_file_name)
+    target_file_names = [config.target_file_name] + [name for name in TARGET_FILE_FALLBACK_NAMES if name != config.target_file_name]
+    metadata = find_drive_file_in_folder_path(service, config.folder_id, TARGETS_FOLDER_NAME, target_file_names)
     content = download_drive_file(service, metadata.file_id).getvalue()
     try:
         parsed = parse_xf_target_workbook(_NamedBytesIO(content, metadata.name))
