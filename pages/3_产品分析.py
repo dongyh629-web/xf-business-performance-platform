@@ -1,25 +1,21 @@
-from pathlib import Path
-
 import streamlit as st
 
-from app.data import load_processed_data, monthly_sales, top_entity_table, top_table
+from app.data import monthly_sales, top_entity_table, top_table
+from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.ui import bar_chart, line_chart, metric_row, show_code_warning, show_context_summary, show_filters
 
-
-DATA_PATH = Path("data/processed/latest_sales.parquet")
 
 st.set_page_config(page_title="产品分析", layout="wide")
 st.title("产品分析")
 st.caption("查看产品组、重点产品和购买客户表现")
 
+ensure_drive_data_loaded()
+render_data_source_sidebar(show_uploaders=False)
+
 df = st.session_state.get("clean_data")
-if df is None:
-    df = load_processed_data(DATA_PATH)
-    if df is not None:
-        st.session_state["data_source"] = "local_processed"
 
 if df is None:
-    st.info("当前暂无销售数据，请回到首页上传 Unleashed 导出的 Excel 文件开始分析。")
+    st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
     st.stop()
 
 filtered = show_filters(df, "products")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from io import BytesIO
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -12,7 +11,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 from app.config import DATE_BASIS_LABELS
-from app.data import load_processed_data
+from app.google_drive import MANUAL_SOURCE_LABEL, ensure_drive_data_loaded, render_data_source_sidebar
 from app.target_metrics import (
     MONTH_LABELS,
     parse_xf_target_workbook,
@@ -26,9 +25,6 @@ from app.tracking_metrics import (
     build_product_group_case_tracking,
 )
 from app.ui import money, percent, show_code_warning, show_context_summary, show_filters
-
-
-DATA_PATH = Path("data/processed/latest_sales.parquet")
 
 
 def _format_percent(value: float | None) -> str:
@@ -175,7 +171,9 @@ def _show_data_status(sales_df: pd.DataFrame | None) -> None:
             st.caption("数据截止日期：无")
         else:
             st.caption("状态：已加载")
-            st.caption(f"当前文件名：{st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or 'latest_sales.parquet'}")
+            st.caption(f"来源：{st.session_state.get('data_source', '未知')}")
+            st.caption(f"当前文件名：{st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or '无'}")
+            st.caption(f"Drive 最后修改时间：{st.session_state.get('sales_drive_modified_time', '无')}")
             st.caption(f"数据截止日期：{_sales_cutoff_text(sales_df)}")
     with status_cols[1]:
         st.markdown("**目标数据**")
@@ -186,7 +184,9 @@ def _show_data_status(sales_df: pd.DataFrame | None) -> None:
             st.caption("已识别工作表：无")
         else:
             st.caption("状态：已加载")
+            st.caption(f"来源：{st.session_state.get('target_source', '当前会话')}")
             st.caption(f"当前文件名：{st.session_state.get('target_excel_name', '网页手动目标')}")
+            st.caption(f"Drive 最后修改时间：{st.session_state.get('target_drive_modified_time', '无')}")
             st.caption(f"已识别年份：{_target_years_text(target_df)}")
             st.caption(f"已识别工作表：{st.session_state.get('target_structure_label', '网页手动建立目标')}")
 
@@ -242,7 +242,7 @@ def _report_notes(filtered: pd.DataFrame, target_name: str, target_year: int, su
     return pd.DataFrame(
         [
             ("报告生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            ("销售数据来源文件", st.session_state.get("source_file_name") or st.session_state.get("current_file_name") or "latest_sales.parquet"),
+            ("销售数据来源文件", st.session_state.get("source_file_name") or st.session_state.get("current_file_name") or "无"),
             ("目标数据来源文件", target_name),
             ("数据截止日期", str(summary.analysis_date.date())),
             ("分析年度", target_year),
@@ -315,11 +315,10 @@ st.set_page_config(page_title="经营追踪", layout="wide")
 st.title("经营追踪")
 st.caption("Business Tracking")
 
+ensure_drive_data_loaded()
+render_data_source_sidebar(show_uploaders=False)
+
 df = st.session_state.get("clean_data")
-if df is None:
-    df = load_processed_data(DATA_PATH)
-    if df is not None:
-        st.session_state["data_source"] = "local_processed"
 
 st.subheader("数据状态")
 _show_data_status(df)
@@ -359,6 +358,9 @@ if pending is not None:
             pending.case_data,
         )
         st.session_state["target_excel_name"] = st.session_state.get("pending_target_excel_name", "目标 Excel")
+        st.session_state["target_source"] = MANUAL_SOURCE_LABEL
+        st.session_state["target_source_type"] = "manual"
+        st.session_state.pop("target_drive_modified_time", None)
         if pending.target_year:
             _sync_home_targets(pending.target_year, pending.company_targets)
         st.success("目标数据已导入当前会话。")
@@ -369,7 +371,7 @@ current_year = analysis_year(df) if df is not None else None
 fallback_year = current_year or datetime.now().year
 
 st.subheader("目标管理 / Target Management")
-st.caption("目标目前仅保存在当前会话，应用休眠、重新部署或会话结束后可能丢失；后续接入 Google Drive 实现长期保存。")
+st.caption("Original Target 可由 Google Drive 或手动上传导入；Revised Target 仅在当前会话中调整，不会写回 Google Drive。")
 available_years = _target_years(target_df, fallback_year)
 default_year_index = available_years.index(current_year) if current_year in available_years else 0
 target_year = st.selectbox("目标年度", available_years, index=default_year_index)
@@ -419,6 +421,8 @@ with button_cols[0]:
                 amount_df=st.session_state.get("target_amount_data"),
                 case_df=st.session_state.get("target_case_data"),
             )
+            st.session_state["target_source"] = "当前会话手动调整"
+            st.session_state["target_source_type"] = "manual"
             _sync_home_targets(target_year, next_targets)
             diff = float(pd.to_numeric(edited_targets["Revised Target"], errors="coerce").fillna(0).sum()) - annual_input
             if abs(diff) > 0.01:
@@ -436,6 +440,8 @@ with button_cols[1]:
             amount_df=st.session_state.get("target_amount_data"),
             case_df=st.session_state.get("target_case_data"),
         )
+        st.session_state["target_source"] = "当前会话手动调整"
+        st.session_state["target_source_type"] = "manual"
         _sync_home_targets(target_year, next_targets)
         st.success("已恢复为原始目标。")
         st.rerun()

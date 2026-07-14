@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 import streamlit as st
 
@@ -13,11 +11,9 @@ from app.customer_health import (
     build_customer_health,
     get_customer_status_style,
 )
-from app.data import apply_date_basis, load_processed_data
+from app.data import apply_date_basis
+from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.ui import money, percent, show_code_warning, show_context_summary, show_filters
-
-
-DATA_PATH = Path("data/processed/latest_sales.parquet")
 
 
 def _format_percent(value: float | None) -> str:
@@ -198,14 +194,13 @@ st.title("客户健康")
 st.caption("Customer Health")
 st.caption("哪些客户正在下滑、沉睡或需要销售跟进？")
 
+ensure_drive_data_loaded()
+render_data_source_sidebar(show_uploaders=False)
+
 df = st.session_state.get("clean_data")
-if df is None:
-    df = load_processed_data(DATA_PATH)
-    if df is not None:
-        st.session_state["data_source"] = "local_processed"
 
 if df is None:
-    st.info("当前暂无销售数据，请回到首页上传 Unleashed 销售明细。")
+    st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
     st.stop()
 
 filtered = show_filters(df, "customer_health")

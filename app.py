@@ -1,12 +1,17 @@
-from datetime import datetime
 from io import BytesIO
 
 import streamlit as st
 
-from app.config import DATA_PATH, PERSIST_UPLOADED_DATA
 from app.business_dashboard import render_business_dashboard
-from app.data import import_excel, load_processed_data, monthly_sales, save_processed_data, top_entity_table, top_table
-from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook
+from app.data import import_excel, monthly_sales, top_entity_table, top_table
+from app.google_drive import (
+    MANUAL_SOURCE_LABEL,
+    ensure_drive_data_loaded,
+    render_data_source_sidebar,
+    store_sales_import_in_session,
+    store_target_workbook_in_session,
+)
+from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook, workbook_looks_like_sales_data
 from app.ui import bar_chart, donut_chart, line_chart, metric_row, show_code_warning, show_filters
 
 
@@ -16,46 +21,14 @@ st.title("鲜锋经营驾驶舱")
 st.caption("XF Business Performance Dashboard")
 
 
-def data_updated_at() -> str | None:
-    if not DATA_PATH.exists():
-        return None
-    return datetime.fromtimestamp(DATA_PATH.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-
-
-with st.sidebar:
-    show_uploader = st.session_state.get("show_data_uploader", not DATA_PATH.exists())
-    uploaded = None
-    with st.expander("销售数据导入", expanded=not DATA_PATH.exists() or show_uploader):
-        current_file = st.session_state.get("source_file_name") or st.session_state.get("current_file_name") or "latest_sales.parquet"
-        last_updated = st.session_state.get("data_last_updated") or data_updated_at()
-        if DATA_PATH.exists() or st.session_state.get("clean_data") is not None:
-            st.caption(f"当前文件：{current_file}")
-            if last_updated:
-                st.caption(f"更新时间：{last_updated}")
-        else:
-            st.caption("当前暂无数据")
-        if st.button("更新销售数据", use_container_width=True):
-            st.session_state["show_data_uploader"] = True
-            show_uploader = True
-        if show_uploader:
-            uploaded = st.file_uploader("上传销售明细 / Upload Unleashed Sales Data", type=["xlsx"], key="sales_data_upload")
+drive_status = ensure_drive_data_loaded()
+uploaded, uploaded_target = render_data_source_sidebar(show_uploaders=True)
 
 if uploaded is not None:
     try:
         with st.spinner("正在读取和清洗 Excel..."):
             result = import_excel(uploaded)
-            if PERSIST_UPLOADED_DATA:
-                save_processed_data(result.clean, DATA_PATH)
-            st.session_state["quality"] = result.quality
-            st.session_state["comparison"] = result.comparison
-            st.session_state["sheet_name"] = result.sheet_name
-            st.session_state["clean_data"] = result.clean
-            st.session_state["current_file_name"] = "latest_sales.parquet"
-            st.session_state["source_file_name"] = getattr(uploaded, "name", "latest_sales.parquet")
-            st.session_state["data_source"] = "uploaded" if PERSIST_UPLOADED_DATA else "session_upload"
-            st.session_state["data_last_updated"] = data_updated_at()
-            st.session_state["source_columns"] = list(result.raw.columns)
-            st.session_state["show_data_uploader"] = False
+            store_sales_import_in_session(result, getattr(uploaded, "name", "销售明细 Excel"), MANUAL_SOURCE_LABEL, "manual")
         st.success(f"导入完成：已识别工作表 `{result.sheet_name}`")
     except ValueError as exc:
         looks_like_target = False
@@ -77,20 +50,32 @@ if uploaded is not None:
         st.error("导入失败：请确认文件是 Unleashed 导出的 Excel，且字段结构未发生变化。详细错误已记录在开发日志中。")
         st.stop()
 
+if uploaded_target is not None:
+    target_bytes = uploaded_target.getvalue()
+    try:
+        parsed_target = parse_xf_target_workbook(BytesIO(target_bytes))
+    except ValueError as exc:
+        if workbook_looks_like_sales_data(BytesIO(target_bytes)):
+            st.error("该文件看起来像销售明细，不像目标表。请使用左侧‘上传销售明细’入口。")
+        else:
+            st.error(str(exc))
+    except Exception:
+        st.error("目标 Excel 导入失败，请确认文件是 XF 销售目标模板。")
+    else:
+        store_target_workbook_in_session(parsed_target, uploaded_target.name, MANUAL_SOURCE_LABEL, "manual")
+        st.success("目标数据已导入当前会话。")
+        st.rerun()
+
 df = st.session_state.get("clean_data")
-if df is None:
-    df = load_processed_data(DATA_PATH)
-    if df is not None:
-        st.session_state["data_source"] = "persistent"
-        st.session_state["current_file_name"] = "latest_sales.parquet"
-        st.session_state["data_last_updated"] = data_updated_at()
 
 if df is None:
-    with st.sidebar:
-        st.markdown("### 数据状态")
-        st.caption("当前暂无数据")
-        st.caption("请上传 Unleashed 销售明细。")
-    st.info("当前暂无销售数据，请上传 Unleashed 销售明细文件开始分析。目标 Excel 请在“经营追踪”页面上传。")
+    if not drive_status.configured:
+        st.info("Google Drive 尚未配置。请配置 Streamlit Secrets，或使用左侧手动上传销售明细。")
+    elif drive_status.sales.status == "failed":
+        st.warning(drive_status.sales.message)
+        st.info("当前暂无销售数据，可使用左侧手动上传销售明细作为备用。")
+    else:
+        st.info("当前暂无销售数据，请使用左侧手动上传销售明细，或点击“刷新 Google Drive 数据”。")
     st.stop()
 
 filtered = show_filters(df, "home")
