@@ -176,9 +176,31 @@ def _tone_style(tone: str) -> str:
     return styles.get(tone, styles["gray"])
 
 
-def _render_total_summary(table: pd.DataFrame) -> None:
+def _delta_text_style(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "color:#6b7280;"
+    return "color:#166534;" if float(value) >= 0 else "color:#b91c1c;"
+
+
+def _total_sales_between(data: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, product_range: str | None) -> float:
+    if data.empty:
+        return 0.0
+    work = data
+    if product_range and product_range != "全部":
+        range_values = work[RANGE_COLUMN].fillna("未分类").astype(str)
+        work = work[range_values.eq(product_range)]
+    dates = pd.to_datetime(work["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
+    return float(pd.to_numeric(work.loc[mask, "Sales Amount"], errors="coerce").fillna(0).sum())
+
+
+def _render_total_summary(table: pd.DataFrame, filtered_data: pd.DataFrame, ctx, product_range: str | None) -> None:
     current_sales = float(pd.to_numeric(table["本月销售额"], errors="coerce").fillna(0).sum())
     previous_sales = float(pd.to_numeric(table["去年同期销售额"], errors="coerce").fillna(0).sum())
+    prior_full_start = pd.Timestamp(year=ctx.year - 1, month=ctx.month, day=1)
+    prior_full_end = prior_full_start + pd.offsets.MonthEnd(0)
+    prior_full_sales = _total_sales_between(filtered_data, prior_full_start, prior_full_end, product_range)
+    prior_full_gap = None if prior_full_sales == 0 else current_sales - prior_full_sales
     targets = pd.to_numeric(table["本月目标"], errors="coerce").dropna()
     monthly_target = None if targets.empty else float(targets.sum())
     completion = None if not monthly_target else current_sales / monthly_target
@@ -192,6 +214,8 @@ def _render_total_summary(table: pd.DataFrame) -> None:
     completion_text = "未配置" if completion is None else percent(completion)
     gap_text = _fmt_signed_money(gap)
     yoy_text = _fmt_percent(yoy)
+    prior_full_gap_text = "无基数" if prior_full_gap is None else f"距去年全月 {_fmt_signed_money(prior_full_gap)}"
+    prior_full_gap_style = _delta_text_style(prior_full_gap)
 
     st.markdown(
         f"""
@@ -200,6 +224,7 @@ def _render_total_summary(table: pd.DataFrame) -> None:
             <div class="xf-total-metrics">
                 <div><span>本月销售</span><strong>{_fmt_money(current_sales)}</strong></div>
                 <div><span>去年同期</span><strong>{_fmt_money(previous_sales)}</strong></div>
+                <div><span>去年全月</span><strong>{_fmt_money(prior_full_sales)}</strong><small style="{prior_full_gap_style}">{prior_full_gap_text}</small></div>
                 <div><span>本月目标</span><strong>{target_text}</strong></div>
                 <div><span>目标完成率</span><strong class="xf-total-pill" style="{completion_style}">{completion_text}</strong></div>
                 <div><span>距离目标</span><strong class="xf-total-pill" style="{gap_style}">{gap_text}</strong></div>
@@ -277,7 +302,7 @@ st.markdown(
     }
     .xf-total-metrics {
         display: grid;
-        grid-template-columns: repeat(6, minmax(110px, 1fr));
+        grid-template-columns: repeat(7, minmax(100px, 1fr));
         gap: 10px;
         align-items: stretch;
     }
@@ -298,6 +323,13 @@ st.markdown(
         margin-top: 4px;
         color: #111827;
         font-size: 1.05rem;
+        line-height: 1.2;
+        white-space: nowrap;
+    }
+    .xf-total-metrics small {
+        display: block;
+        margin-top: 4px;
+        font-size: 0.72rem;
         line-height: 1.2;
         white-space: nowrap;
     }
@@ -373,7 +405,7 @@ else:
     if selected_range != "全部":
         table = table[table["产品系列"].eq(selected_range)].copy()
 
-    _render_total_summary(table)
+    _render_total_summary(table, filtered, ctx, selected_range)
 
     section_header("精简系列经营总览表")
     status_options = sorted(table["当前状态"].dropna().unique().tolist())
