@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
 import logging
+import re
 from typing import Any
 
 import pandas as pd
@@ -19,6 +21,7 @@ DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SALES_FOLDER_NAME = "sales data"
 TARGETS_FOLDER_NAME = "targets"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
+EXCEL_EXTENSIONS = (".xlsx", ".xls")
 
 
 class DriveUserError(RuntimeError):
@@ -61,6 +64,15 @@ class DriveLoadStatus:
     message: str
     sales: DriveLoadItemStatus
     targets: DriveLoadItemStatus
+
+
+@dataclass(frozen=True)
+class DriveFileCandidate:
+    metadata: DriveFileMetadata
+    filename_date: pd.Timestamp | None
+    version: int | None
+    year: int | None
+    reason: str
 
 
 class _NamedBytesIO(BytesIO):
@@ -159,27 +171,102 @@ def _normalize_drive_name(value: str) -> str:
     return " ".join(str(value).strip().casefold().split())
 
 
+def _is_excel_file_name(name: str) -> bool:
+    stripped = str(name).strip()
+    if not stripped or stripped.startswith(".") or stripped.startswith("~$"):
+        return False
+    return stripped.casefold().endswith(EXCEL_EXTENSIONS)
+
+
+def _parse_modified_time(value: str | None) -> pd.Timestamp:
+    if not value:
+        return pd.Timestamp.min.tz_localize("UTC")
+    parsed = pd.to_datetime(value, errors="coerce", utc=True)
+    return pd.Timestamp.min.tz_localize("UTC") if pd.isna(parsed) else parsed
+
+
+def _parse_date_from_filename(name: str) -> pd.Timestamp | None:
+    text = str(name)
+    patterns = [
+        r"(?<!\d)(20\d{2})[-_](0[1-9]|1[0-2])[-_](0[1-9]|[12]\d|3[01])(?!\d)",
+        r"(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)",
+        r"(?<!\d)(0[1-9]|[12]\d|3[01])[-_](0[1-9]|1[0-2])[-_](20\d{2})(?!\d)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        groups = match.groups()
+        if len(groups[0]) == 4:
+            year, month, day = int(groups[0]), int(groups[1]), int(groups[2])
+        else:
+            day, month, year = int(groups[0]), int(groups[1]), int(groups[2])
+        parsed = pd.Timestamp(year=year, month=month, day=day)
+        if not pd.isna(parsed):
+            return parsed
+    return None
+
+
+def _parse_year_from_filename(name: str) -> int | None:
+    match = re.search(r"(?<!\d)(20\d{2})(?!\d)", str(name))
+    return int(match.group(1)) if match else None
+
+
+def _parse_version_from_filename(name: str) -> int | None:
+    match = re.search(r"(?i)(?:^|[^a-z0-9])v(?:ersion)?[_ -]?(\d+)(?:[^a-z0-9]|$)", str(name))
+    return int(match.group(1)) if match else None
+
+
+def _drive_candidate_from_item(item: dict[str, Any]) -> DriveFileCandidate | None:
+    name = str(item.get("name", ""))
+    if not _is_excel_file_name(name):
+        return None
+    date = _parse_date_from_filename(name)
+    version = _parse_version_from_filename(name)
+    year = _parse_year_from_filename(name)
+    reason = "文件名日期最新" if date is not None else "Drive 修改时间最新"
+    return DriveFileCandidate(
+        metadata=_metadata_from_drive_item(item, name),
+        filename_date=date,
+        version=version,
+        year=year,
+        reason=reason,
+    )
+
+
+def _candidate_modified_time(candidate: DriveFileCandidate) -> pd.Timestamp:
+    return _parse_modified_time(candidate.metadata.modified_time)
+
+
 def _list_drive_children(service, folder_id: str, mime_type: str | None = None) -> list[dict[str, Any]]:
     query_parts = [f"'{_escape_drive_query_value(folder_id)}' in parents", "trashed = false"]
     if mime_type:
         query_parts.append(f"mimeType = '{_escape_drive_query_value(mime_type)}'")
+    files: list[dict[str, Any]] = []
+    page_token = None
     try:
-        response = (
-            service.files()
-            .list(
-                q=" and ".join(query_parts),
-                fields="files(id,name,mimeType,modifiedTime,size,webViewLink)",
-                pageSize=100,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-                corpora="allDrives",
+        while True:
+            response = (
+                service.files()
+                .list(
+                    q=" and ".join(query_parts),
+                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink)",
+                    pageSize=100,
+                    pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                    corpora="allDrives",
+                )
+                .execute()
             )
-            .execute()
-        )
+            files.extend(response.get("files", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
     except Exception as exc:
         logger.exception("Google Drive child listing failed")
         raise DriveUserError("Google Drive 文件夹内容读取失败，请检查文件夹权限。") from exc
-    return response.get("files", [])
+    return files
 
 
 def _metadata_from_drive_item(item: dict[str, Any], fallback_name: str) -> DriveFileMetadata:
@@ -306,6 +393,63 @@ def find_drive_file_in_folder_path(
     raise DriveUserError(f"Google Drive 中未找到文件：{subfolder_name}/{names}。")
 
 
+def list_drive_excel_candidates(service, root_folder_id: str, subfolder_name: str) -> list[DriveFileCandidate]:
+    folder = find_drive_folder(service, root_folder_id, subfolder_name)
+    items = _list_drive_children(service, folder.file_id)
+    candidates = [candidate for item in items if (candidate := _drive_candidate_from_item(item)) is not None]
+    candidate_names = [candidate.metadata.name for candidate in candidates]
+    logger.info("Google Drive Excel candidates folder=%s files=%s", subfolder_name, candidate_names)
+    return candidates
+
+
+def _sales_candidate_sort_key(candidate: DriveFileCandidate) -> tuple[pd.Timestamp, pd.Timestamp]:
+    effective_date = candidate.filename_date
+    if effective_date is None:
+        effective_date = _candidate_modified_time(candidate).tz_convert(None).normalize()
+    return effective_date, _candidate_modified_time(candidate)
+
+
+def sorted_sales_candidates(candidates: list[DriveFileCandidate]) -> list[DriveFileCandidate]:
+    return sorted(candidates, key=_sales_candidate_sort_key, reverse=True)
+
+
+def _target_candidate_sort_key(candidate: DriveFileCandidate, analysis_year: int | None) -> tuple[int, int, pd.Timestamp]:
+    year_matches = 1 if analysis_year is not None and candidate.year == analysis_year else 0
+    version = candidate.version if candidate.version is not None else -1
+    return year_matches, version, _candidate_modified_time(candidate)
+
+
+def sorted_target_candidates(candidates: list[DriveFileCandidate], analysis_year: int | None) -> list[DriveFileCandidate]:
+    fixed_names = {name.casefold() for name in ["XF_Targets_Latest.xlsx", *TARGET_FILE_FALLBACK_NAMES]}
+    target_like = [
+        candidate
+        for candidate in candidates
+        if "target" in candidate.metadata.name.casefold()
+        or "目标" in candidate.metadata.name
+        or candidate.metadata.name.casefold() in fixed_names
+    ]
+    return sorted(target_like, key=lambda candidate: _target_candidate_sort_key(candidate, analysis_year), reverse=True)
+
+
+def _target_selection_reason(candidate: DriveFileCandidate, analysis_year: int | None) -> str:
+    parts = []
+    if analysis_year is not None and candidate.year == analysis_year:
+        parts.append("当前年度匹配")
+    if candidate.version is not None:
+        parts.append(f"版本号 v{candidate.version}")
+    parts.append("Drive 修改时间最新")
+    return " + ".join(parts)
+
+
+def _analysis_year_from_session() -> int | None:
+    st = _get_streamlit()
+    df = st.session_state.get("clean_data")
+    if df is None or "Performance Date" not in df.columns:
+        return None
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dropna()
+    return None if dates.empty else int(dates.max().year)
+
+
 def get_drive_file_metadata(service, file_id: str) -> DriveFileMetadata:
     try:
         item = (
@@ -364,6 +508,73 @@ def store_sales_import_in_session(result: ImportResult, file_name: str, source_l
     st.session_state["source_columns"] = list(result.raw.columns)
 
 
+def _sales_max_date(clean: pd.DataFrame) -> str:
+    dates = pd.to_datetime(clean.get("Performance Date"), errors="coerce").dropna()
+    return "" if dates.empty else str(dates.max().date())
+
+
+def _validate_sales_result(result: ImportResult) -> None:
+    clean = result.clean
+    if clean is None or clean.empty:
+        raise DriveUserError("销售文件校验失败：清洗后没有有效数据。")
+    required_columns = ["Performance Date", "Sales Amount", "Customer Code", "Product Code"]
+    missing = [column for column in required_columns if column not in clean.columns]
+    if missing:
+        raise DriveUserError(f"销售文件校验失败：缺少字段 {', '.join(missing)}。")
+    if pd.to_datetime(clean["Performance Date"], errors="coerce").dropna().empty:
+        raise DriveUserError("销售文件校验失败：没有有效 Performance Date。")
+    if pd.to_numeric(clean["Sales Amount"], errors="coerce").dropna().empty:
+        raise DriveUserError("销售文件校验失败：没有有效 Sales Amount。")
+    if clean["Customer Code"].dropna().astype(str).str.strip().eq("").all():
+        raise DriveUserError("销售文件校验失败：没有有效 Customer Code。")
+    if clean["Product Code"].dropna().astype(str).str.strip().eq("").all():
+        raise DriveUserError("销售文件校验失败：没有有效 Product Code。")
+
+
+def _validate_target_workbook(parsed: XFTargetWorkbook) -> None:
+    if parsed.target_year is None:
+        raise DriveUserError("目标文件校验失败：未识别目标年度。")
+    target_df = parsed.company_targets
+    if target_df is None or target_df.empty:
+        raise DriveUserError("目标文件校验失败：未识别公司月度目标。")
+    if "Month" not in target_df.columns:
+        raise DriveUserError("目标文件校验失败：缺少月份字段。")
+    months = set(pd.to_numeric(target_df["Month"], errors="coerce").dropna().astype(int).tolist())
+    if set(range(1, 13)) - months:
+        raise DriveUserError("目标文件校验失败：缺少 1-12 月金额目标。")
+    if not parsed.structure_label:
+        raise DriveUserError("目标文件校验失败：目标结构无效。")
+
+
+def _now_text() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _set_drive_sales_success(metadata: DriveFileMetadata, result: ImportResult, reason: str, candidates: list[DriveFileCandidate]) -> None:
+    st = _get_streamlit()
+    st.session_state["drive_sales_file_id"] = metadata.file_id
+    st.session_state["drive_sales_file_name"] = metadata.name
+    st.session_state["drive_sales_modified_time"] = metadata.modified_time
+    st.session_state["drive_sales_loaded_at"] = _now_text()
+    st.session_state["drive_sales_status"] = "已连接"
+    st.session_state["drive_sales_row_count"] = int(len(result.clean))
+    st.session_state["drive_sales_max_date"] = _sales_max_date(result.clean)
+    st.session_state["drive_sales_selection_reason"] = reason
+    st.session_state["drive_sales_candidates"] = [candidate.metadata.name for candidate in candidates[:10]]
+
+
+def _set_drive_target_success(metadata: DriveFileMetadata, parsed: XFTargetWorkbook, reason: str, candidates: list[DriveFileCandidate]) -> None:
+    st = _get_streamlit()
+    st.session_state["drive_target_file_id"] = metadata.file_id
+    st.session_state["drive_target_file_name"] = metadata.name
+    st.session_state["drive_target_modified_time"] = metadata.modified_time
+    st.session_state["drive_target_loaded_at"] = _now_text()
+    st.session_state["drive_target_status"] = "已连接"
+    st.session_state["drive_target_year"] = parsed.target_year
+    st.session_state["drive_target_selection_reason"] = reason
+    st.session_state["drive_target_candidates"] = [candidate.metadata.name for candidate in candidates[:10]]
+
+
 def store_target_workbook_in_session(parsed: XFTargetWorkbook, file_name: str, source_label: str, source_type: str, modified_time: str | None = None) -> None:
     st = _get_streamlit()
     target_df = parsed.company_targets.copy()
@@ -404,19 +615,62 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
         and st.session_state.get("clean_data") is not None
     ):
         return DriveLoadItemStatus("skipped", "当前会话已手动上传销售数据，优先使用手动上传。")
-    metadata = find_drive_file_in_folder_path(service, config.folder_id, SALES_FOLDER_NAME, [config.sales_file_name])
-    content = download_drive_file(service, metadata.file_id).getvalue()
     try:
-        result = import_excel(_NamedBytesIO(content, metadata.name))
-    except ValueError as exc:
-        raise DriveUserError(f"Google Drive 销售文件读取失败：{exc}") from exc
-    except Exception as exc:
-        logger.exception("Google Drive sales parse failed file_name=%s", metadata.name)
-        raise DriveUserError("Google Drive 销售文件解析失败，请确认文件是 Unleashed 销售明细。") from exc
-    store_sales_import_in_session(result, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time)
-    st.session_state["sales_drive_file_id"] = metadata.file_id
-    st.session_state["sales_drive_modified_time"] = metadata.modified_time
-    return DriveLoadItemStatus("loaded", "销售数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
+        candidates = sorted_sales_candidates(list_drive_excel_candidates(service, config.folder_id, SALES_FOLDER_NAME))
+    except DriveUserError:
+        if st.session_state.get("clean_data") is not None:
+            st.session_state["drive_sales_status"] = "使用上次成功版本"
+            return DriveLoadItemStatus("using_previous", "Drive 中未找到有效销售文件，当前继续使用本次会话已加载数据。")
+        raise
+    if not candidates:
+        if st.session_state.get("clean_data") is not None:
+            st.session_state["drive_sales_status"] = "使用上次成功版本"
+            return DriveLoadItemStatus("using_previous", "Drive 中未找到有效销售文件，当前继续使用本次会话已加载数据。")
+        raise DriveUserError("Drive 中未找到有效销售 Excel 文件。")
+
+    current_id = st.session_state.get("drive_sales_file_id")
+    current_modified = st.session_state.get("drive_sales_modified_time")
+    if (
+        force
+        and st.session_state.get("clean_data") is not None
+        and current_id
+        and current_modified
+        and candidates[0].metadata.file_id == current_id
+        and candidates[0].metadata.modified_time == current_modified
+    ):
+        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", candidates[0].metadata.name, candidates[0].metadata.modified_time, candidates[0].metadata.file_id)
+
+    failures: list[str] = []
+    for candidate in candidates:
+        metadata = candidate.metadata
+        try:
+            content = download_drive_file(service, metadata.file_id).getvalue()
+            result = import_excel(_NamedBytesIO(content, metadata.name))
+            _validate_sales_result(result)
+        except ValueError as exc:
+            failures.append(f"{metadata.name}: {exc}")
+            logger.warning("Google Drive sales candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
+            continue
+        except DriveUserError as exc:
+            failures.append(f"{metadata.name}: {exc}")
+            logger.warning("Google Drive sales candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
+            continue
+        except Exception as exc:
+            failures.append(f"{metadata.name}: 解析失败")
+            logger.exception("Google Drive sales parse failed file_name=%s", metadata.name)
+            continue
+        store_sales_import_in_session(result, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time)
+        st.session_state["sales_drive_file_id"] = metadata.file_id
+        st.session_state["sales_drive_modified_time"] = metadata.modified_time
+        _set_drive_sales_success(metadata, result, candidate.reason, candidates)
+        logger.info("Google Drive sales selected file=%s reason=%s", metadata.name, candidate.reason)
+        return DriveLoadItemStatus("loaded", "销售数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
+
+    if st.session_state.get("clean_data") is not None:
+        st.session_state["drive_sales_status"] = "使用上次成功版本"
+        logger.warning("Google Drive sales all candidates failed, keeping previous data")
+        return DriveLoadItemStatus("using_previous", "最新文件解析失败，当前继续使用上一次成功数据。")
+    raise DriveUserError("Google Drive 未找到可解析的销售 Excel 文件。")
 
 
 def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadItemStatus:
@@ -427,20 +681,64 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
         and st.session_state.get("target_data") is not None
     ):
         return DriveLoadItemStatus("skipped", "当前会话已手动上传目标数据，优先使用手动上传。")
-    target_file_names = [config.target_file_name] + [name for name in TARGET_FILE_FALLBACK_NAMES if name != config.target_file_name]
-    metadata = find_drive_file_in_folder_path(service, config.folder_id, TARGETS_FOLDER_NAME, target_file_names)
-    content = download_drive_file(service, metadata.file_id).getvalue()
+    analysis_year = _analysis_year_from_session()
     try:
-        parsed = parse_xf_target_workbook(_NamedBytesIO(content, metadata.name))
-    except ValueError as exc:
-        raise DriveUserError(f"Google Drive 目标文件读取失败：{exc}") from exc
-    except Exception as exc:
-        logger.exception("Google Drive target parse failed file_name=%s", metadata.name)
-        raise DriveUserError("Google Drive 目标文件解析失败，请确认文件是 XF 目标 Excel。") from exc
-    store_target_workbook_in_session(parsed, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time)
-    st.session_state["target_drive_file_id"] = metadata.file_id
-    st.session_state["target_drive_modified_time"] = metadata.modified_time
-    return DriveLoadItemStatus("loaded", "目标数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
+        candidates = sorted_target_candidates(list_drive_excel_candidates(service, config.folder_id, TARGETS_FOLDER_NAME), analysis_year)
+    except DriveUserError:
+        if st.session_state.get("target_data") is not None:
+            st.session_state["drive_target_status"] = "使用上次成功版本"
+            return DriveLoadItemStatus("using_previous", "Drive 中未找到有效目标文件，当前继续使用本次会话已加载数据。")
+        raise
+    if not candidates:
+        if st.session_state.get("target_data") is not None:
+            st.session_state["drive_target_status"] = "使用上次成功版本"
+            return DriveLoadItemStatus("using_previous", "Drive 中未找到有效目标文件，当前继续使用本次会话已加载数据。")
+        raise DriveUserError("Drive 中未找到有效目标 Excel 文件。")
+
+    current_id = st.session_state.get("drive_target_file_id")
+    current_modified = st.session_state.get("drive_target_modified_time")
+    if (
+        force
+        and st.session_state.get("target_data") is not None
+        and current_id
+        and current_modified
+        and candidates[0].metadata.file_id == current_id
+        and candidates[0].metadata.modified_time == current_modified
+    ):
+        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", candidates[0].metadata.name, candidates[0].metadata.modified_time, candidates[0].metadata.file_id)
+
+    failures: list[str] = []
+    for candidate in candidates:
+        metadata = candidate.metadata
+        try:
+            content = download_drive_file(service, metadata.file_id).getvalue()
+            parsed = parse_xf_target_workbook(_NamedBytesIO(content, metadata.name))
+            _validate_target_workbook(parsed)
+        except ValueError as exc:
+            failures.append(f"{metadata.name}: {exc}")
+            logger.warning("Google Drive target candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
+            continue
+        except DriveUserError as exc:
+            failures.append(f"{metadata.name}: {exc}")
+            logger.warning("Google Drive target candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
+            continue
+        except Exception:
+            failures.append(f"{metadata.name}: 解析失败")
+            logger.exception("Google Drive target parse failed file_name=%s", metadata.name)
+            continue
+        store_target_workbook_in_session(parsed, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time)
+        st.session_state["target_drive_file_id"] = metadata.file_id
+        st.session_state["target_drive_modified_time"] = metadata.modified_time
+        reason = _target_selection_reason(candidate, analysis_year)
+        _set_drive_target_success(metadata, parsed, reason, candidates)
+        logger.info("Google Drive target selected file=%s reason=%s", metadata.name, reason)
+        return DriveLoadItemStatus("loaded", "目标数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
+
+    if st.session_state.get("target_data") is not None:
+        st.session_state["drive_target_status"] = "使用上次成功版本"
+        logger.warning("Google Drive target all candidates failed, keeping previous data")
+        return DriveLoadItemStatus("using_previous", "最新目标文件解析失败，当前继续使用上一次成功数据。")
+    raise DriveUserError("Google Drive 未找到可解析的目标 Excel 文件。")
 
 
 def _status_from_error(message: str) -> DriveLoadItemStatus:
@@ -552,28 +850,41 @@ def render_data_source_sidebar(show_uploaders: bool = False):
             st.caption("Google Drive：已配置")
         else:
             st.caption("Google Drive：未检查")
+        st.caption("系统会自动选择 Google Drive 文件夹中最新且通过校验的 Excel。")
 
         if st.button("刷新 Google Drive 数据", use_container_width=True):
             clear_drive_state()
             with st.spinner("正在重新加载 Google Drive 数据..."):
-                load_drive_business_files(force=True)
+                refreshed = load_drive_business_files(force=True)
+            messages = [item.message for item in [refreshed.sales, refreshed.targets] if item.message]
+            if messages:
+                st.session_state["drive_refresh_message"] = "；".join(messages)
             st.rerun()
+        if st.session_state.get("drive_refresh_message"):
+            st.caption(st.session_state["drive_refresh_message"])
 
         st.markdown("**销售数据**")
         sales_loaded = st.session_state.get("clean_data") is not None
-        st.caption(f"状态：{'已加载' if sales_loaded else '未加载'}")
+        st.caption(f"状态：{st.session_state.get('drive_sales_status') or ('已加载' if sales_loaded else '未加载')}")
         st.caption(f"来源：{_source_text(st.session_state.get('sales_source_type'), st.session_state.get('data_source'))}")
-        st.caption(f"文件名：{st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or '无'}")
-        st.caption(f"Drive 最后修改时间：{st.session_state.get('sales_drive_modified_time') or '无'}")
-        st.caption(f"数据截止日期：{_sales_cutoff_text()}")
+        st.caption(f"当前文件名：{st.session_state.get('drive_sales_file_name') or st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or '无'}")
+        st.caption(f"Drive 修改时间：{st.session_state.get('drive_sales_modified_time') or st.session_state.get('sales_drive_modified_time') or '无'}")
+        st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_sales_loaded_at') or '无'}")
+        st.caption(f"数据截止日期：{st.session_state.get('drive_sales_max_date') or _sales_cutoff_text()}")
+        st.caption(f"数据行数：{st.session_state.get('drive_sales_row_count') or (len(st.session_state.get('clean_data')) if sales_loaded else '无')}")
+        if st.session_state.get("drive_sales_selection_reason"):
+            st.caption(f"选择依据：{st.session_state['drive_sales_selection_reason']}")
 
         st.markdown("**目标数据**")
         target_loaded = st.session_state.get("target_data") is not None
-        st.caption(f"状态：{'已加载' if target_loaded else '未加载'}")
+        st.caption(f"状态：{st.session_state.get('drive_target_status') or ('已加载' if target_loaded else '未加载')}")
         st.caption(f"来源：{_source_text(st.session_state.get('target_source_type'), st.session_state.get('target_source'))}")
-        st.caption(f"文件名：{st.session_state.get('target_excel_name') or '无'}")
-        st.caption(f"Drive 最后修改时间：{st.session_state.get('target_drive_modified_time') or '无'}")
-        st.caption(f"识别年度：{_target_years_text()}")
+        st.caption(f"当前文件名：{st.session_state.get('drive_target_file_name') or st.session_state.get('target_excel_name') or '无'}")
+        st.caption(f"Drive 修改时间：{st.session_state.get('drive_target_modified_time') or st.session_state.get('target_drive_modified_time') or '无'}")
+        st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_target_loaded_at') or '无'}")
+        st.caption(f"识别年度：{st.session_state.get('drive_target_year') or _target_years_text()}")
+        if st.session_state.get("drive_target_selection_reason"):
+            st.caption(f"选择依据：{st.session_state['drive_target_selection_reason']}")
 
         if show_uploaders:
             with st.expander("手动上传销售数据", expanded=False):
