@@ -91,6 +91,52 @@ def kpi_grid(metrics: list[dict[str, object]], columns: int = 4) -> None:
                 col.caption(str(item["caption"]))
 
 
+def metric_delta(value: float | int | None, suffix: str = "", precision: int = 1) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    sign = "+" if float(value) > 0 else ""
+    return f"{sign}{float(value):.{precision}f}{suffix}"
+
+
+def metric_card(label: str, value: object, delta: object | None = None, help: str | None = None) -> None:
+    st.metric(label, value, delta=delta, help=help)
+
+
+def kpi_card(label: str, value: object, delta: object | None = None, help: str | None = None) -> None:
+    metric_card(label, value, delta=delta, help=help)
+
+
+def data_status(label: str, loaded: bool, detail: str | None = None) -> None:
+    tone = "green" if loaded else "gray"
+    state = "已加载" if loaded else "未加载"
+    st.markdown(f"**{label}** {status_badge(state, tone)}", unsafe_allow_html=True)
+    if detail:
+        st.caption(detail)
+
+
+def empty_state(message: str, caption: str | None = None) -> None:
+    st.info(message)
+    if caption:
+        st.caption(caption)
+
+
+def formatted_table(
+    data: pd.DataFrame,
+    *,
+    height: int | None = None,
+    use_container_width: bool = True,
+    hide_index: bool = True,
+    **kwargs,
+) -> None:
+    st.dataframe(
+        data,
+        height=height,
+        use_container_width=use_container_width,
+        hide_index=hide_index,
+        **kwargs,
+    )
+
+
 def money(value: float) -> str:
     return f"£{value:,.0f}"
 
