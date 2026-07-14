@@ -91,7 +91,7 @@ def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
     for column in ["最近下单日期", "Expected Next Order Date"]:
         if column in display.columns:
             display[column] = display[column].map(_format_date)
-    for column in ["最近4周销售额", "前4周销售额", "历史累计销售额", "最近一次订单金额", "历史平均订单金额"]:
+    for column in ["最近4周销售额", "前4周销售额", "绝对下降金额", "历史累计销售额", "最近一次订单金额", "历史平均订单金额"]:
         if column in display.columns:
             display[column] = display[column].map(_format_money)
     for column in ["Typical Order Interval Days"]:
@@ -133,7 +133,7 @@ def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
 def _style_status_columns(df: pd.DataFrame):
     status_columns = [
         column
-        for column in ["风险等级", "Health Status", "Trend Direction", "Improvement Type", "Interval Status", "节奏状态"]
+        for column in ["风险等级", "Health Status", "Trend Direction", "Improvement Type", "Interval Status", "节奏状态", "沉睡状态"]
         if column in df.columns
     ]
     if not status_columns:
@@ -167,6 +167,30 @@ def _priority_text(priority: str) -> str:
     if priority == "中优先级":
         return ":orange[**中优先级**]"
     return ":gray[**低优先级**]"
+
+
+def _actionable_reason(row: pd.Series) -> str:
+    typical = row.get("Typical Order Interval Days")
+    days_since = row.get("Days Since Last Order")
+    days_overdue = row.get("Days Overdue")
+    value_decline = row.get("金额变化率")
+    frequency_decline = row.get("频次变化率")
+    if pd.notna(typical) and pd.notna(days_since) and float(days_since) > float(typical):
+        return f"原本约每 {float(typical):.0f} 天采购，当前已 {float(days_since):.0f} 天未下单"
+    if pd.notna(value_decline):
+        return f"最近4周金额下降 {abs(float(value_decline)):.1%}"
+    if pd.notna(frequency_decline):
+        return f"最近8周订单频次下降 {abs(float(frequency_decline)):.1%}"
+    if pd.notna(days_overdue) and float(days_overdue) > 0:
+        return f"已超过正常节奏 {float(days_overdue):.0f} 天"
+    return str(row.get("主要风险原因", "近期经营异常"))
+
+
+def _days_overdue_text(row: pd.Series) -> str:
+    days = row.get("Days Overdue")
+    if pd.isna(days):
+        return "暂无稳定周期"
+    return f"{float(days):.0f} 天"
 
 
 st.set_page_config(page_title="客户健康", layout="wide")
@@ -211,53 +235,30 @@ if result.abc_fallback_used:
 st.subheader("今日待跟进")
 st.caption("Customers to Follow Up")
 if result.follow_up.empty:
-    st.info("当前筛选范围内暂无达到规则阈值的风险客户。")
+    st.info("当前筛选范围内暂无近期异常且仍适合今天跟进的客户。长期未下单客户已归入“长期沉睡或可能流失”。")
 else:
     for _, row in result.follow_up.iterrows():
         with st.container(border=True):
-            cols = st.columns([1.1, 2.1, 1.3, 1.2, 1.1])
+            cols = st.columns([1.0, 2.0, 1.3, 1.2, 1.2, 1.2])
             cols[0].markdown(_priority_text(row["风险等级"]))
             cols[1].markdown(f"**{row.get('Customer Name', '')}**")
             cols[1].caption(str(row.get("Customer Code", "")))
-            cols[2].caption("主要风险")
-            cols[2].markdown(_impact_text(row))
+            cols[2].caption("正常采购周期")
+            cols[2].markdown(_format_days(row.get("Typical Order Interval Days")))
             cols[3].caption("当前未下单")
             cols[3].markdown(f"{int(row.get('Days Since Last Order', 0) or 0)} 天")
-            cols[4].caption("正常周期")
-            cols[4].markdown(_format_days(row.get("Typical Order Interval Days")))
+            cols[4].caption("超过正常节奏")
+            cols[4].markdown(_days_overdue_text(row))
+            cols[5].caption("偏离倍数")
+            cols[5].markdown(_format_ratio(row.get("Interval Ratio")))
+            if pd.notna(row.get("金额变化率")):
+                st.caption(f"最近4周金额下降：{abs(float(row['金额变化率'])):.1%}")
             st.caption(
+                f"主要原因：{_actionable_reason(row)} | "
                 f"最近下单：{_format_date(row.get('最近下单日期'))} | "
                 f"预计采购：{_format_date(row.get('Expected Next Order Date')) or '暂无稳定周期'} | "
-                f"已延期：{int(row.get('Days Overdue', 0) or 0)} 天 | "
-                f"偏离倍数：{_format_ratio(row.get('Interval Ratio'))} | "
                 f"采购节奏：{row.get('Interval Stability Status', '历史不足')} | "
                 f"风险类型：{row.get('风险类型', '')} | "
-                f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
-            )
-
-st.subheader("近期改善客户")
-st.caption("Improving Customers")
-improving = result.improving_customers.head(10).copy()
-if improving.empty:
-    st.info("当前没有识别到明显改善或恢复正常的客户。")
-else:
-    for _, row in improving.iterrows():
-        with st.container(border=True):
-            cols = st.columns([2.2, 1.2, 1.4, 1.4, 1.2])
-            cols[0].markdown(f"**{row.get('Customer Name', '')}**")
-            cols[0].caption(str(row.get("Customer Code", "")))
-            cols[1].markdown(f":green[**{row.get('Improvement Type', '')}**]")
-            cols[2].caption("金额变化")
-            cols[2].markdown(f"{_format_money(row.get('前4周销售额'))} → {_format_money(row.get('最近4周销售额'))}")
-            if pd.notna(row.get("金额增长率")):
-                cols[2].caption(f"+{float(row['金额增长率']):.1%}")
-            cols[3].caption("订单频次")
-            cols[3].markdown(f"{int(row.get('前8周订单数', 0))} 单 → {int(row.get('最近8周订单数', 0))} 单")
-            cols[4].caption("当前节奏")
-            cols[4].markdown(_format_ratio(row.get("Interval Ratio")))
-            st.caption(
-                f"正常周期：{_format_days(row.get('Typical Order Interval Days'))} | "
-                f"采购节奏：{row.get('Interval Stability Status', '历史不足')} | "
                 f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
             )
 
@@ -273,11 +274,16 @@ else:
     new_customer_text = f"{len(result.new_customers):,}"
 metric_cols[3].metric("本月新客户", new_customer_text)
 
-metric_cols = st.columns(4)
-metric_cols[0].metric("30天未下单客户", f"{len(result.dormant_30):,}")
-metric_cols[1].metric("90天未下单客户", f"{len(result.dormant_90):,}")
-metric_cols[2].metric("金额下降客户", f"{len(result.value_decline):,}")
-metric_cols[3].metric("频次下降客户", f"{len(result.frequency_decline):,}")
+metric_cols = st.columns(5)
+metric_cols[0].metric("今日可跟进客户", f"{len(result.follow_up):,}")
+metric_cols[1].metric("长期沉睡客户", f"{len(result.dormant_lost_customers):,}")
+metric_cols[2].metric("近期改善客户", f"{len(result.improving_customers):,}")
+metric_cols[3].metric("30天未下单客户", f"{len(result.dormant_30):,}")
+metric_cols[4].metric("90天未下单客户", f"{len(result.dormant_90):,}")
+
+metric_cols = st.columns(2)
+metric_cols[0].metric("金额下降客户", f"{len(result.value_decline):,}")
+metric_cols[1].metric("频次下降客户", f"{len(result.frequency_decline):,}")
 
 st.subheader("风险客户名单")
 risk_table = result.risk_customers.copy()
@@ -323,6 +329,46 @@ else:
         file_name=f"XF_Customer_Health_{anchor.date()}.csv",
         mime="text/csv",
     )
+
+with st.expander("长期沉睡或可能流失 / Dormant or Lost", expanded=False):
+    dormant_lost = result.dormant_lost_customers.copy()
+    if dormant_lost.empty:
+        st.info("当前没有识别到长期沉睡或可能流失客户。")
+    else:
+        st.caption("这些客户不进入今日待跟进前列，用于后续清理、重新激活或单独复盘。")
+        st.dataframe(_style_status_columns(_display_risk_table(dormant_lost)), width="stretch", hide_index=True)
+        st.download_button(
+            "下载长期沉睡客户 / Download Dormant Customers",
+            _csv_bytes(dormant_lost),
+            file_name=f"XF_Dormant_Customers_{anchor.date()}.csv",
+            mime="text/csv",
+        )
+
+st.subheader("近期改善客户")
+st.caption("Improving Customers")
+improving = result.improving_customers.head(10).copy()
+if improving.empty:
+    st.info("当前没有识别到明显改善或恢复正常的客户。")
+else:
+    for _, row in improving.iterrows():
+        with st.container(border=True):
+            cols = st.columns([2.2, 1.2, 1.4, 1.4, 1.2])
+            cols[0].markdown(f"**{row.get('Customer Name', '')}**")
+            cols[0].caption(str(row.get("Customer Code", "")))
+            cols[1].markdown(f":green[**{row.get('Improvement Type', '')}**]")
+            cols[2].caption("金额变化")
+            cols[2].markdown(f"{_format_money(row.get('前4周销售额'))} → {_format_money(row.get('最近4周销售额'))}")
+            if pd.notna(row.get("金额增长率")):
+                cols[2].caption(f"+{float(row['金额增长率']):.1%}")
+            cols[3].caption("订单频次")
+            cols[3].markdown(f"{int(row.get('前8周订单数', 0))} 单 → {int(row.get('最近8周订单数', 0))} 单")
+            cols[4].caption("当前节奏")
+            cols[4].markdown(_format_ratio(row.get("Interval Ratio")))
+            st.caption(
+                f"正常周期：{_format_days(row.get('Typical Order Interval Days'))} | "
+                f"采购节奏：{row.get('Interval Stability Status', '历史不足')} | "
+                f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
+            )
 
 st.subheader("新客户名单")
 if anchor.to_period("M") < pd.Timestamp(NEW_CUSTOMER_START_DATE).to_period("M"):

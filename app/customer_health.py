@@ -20,6 +20,10 @@ CUSTOMER_INTERVAL_WARNING_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_WARNING
 CUSTOMER_INTERVAL_HIGH_RISK_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_HIGH_RISK_RATIO", 2.5)
 CUSTOMER_INTERVAL_STABILITY_VERY_STABLE_CV = getattr(app_config, "CUSTOMER_INTERVAL_STABILITY_VERY_STABLE_CV", 0.25)
 CUSTOMER_INTERVAL_STABILITY_STABLE_CV = getattr(app_config, "CUSTOMER_INTERVAL_STABILITY_STABLE_CV", 0.50)
+CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER = getattr(app_config, "CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER", 90)
+CUSTOMER_ACTIONABLE_MIN_HISTORICAL_SALES = getattr(app_config, "CUSTOMER_ACTIONABLE_MIN_HISTORICAL_SALES", 3000)
+CUSTOMER_ACTIONABLE_MIN_INTERVAL_RATIO = getattr(app_config, "CUSTOMER_ACTIONABLE_MIN_INTERVAL_RATIO", 1.4)
+CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO = getattr(app_config, "CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO", 5.0)
 CUSTOMER_VALUE_IMPROVEMENT_THRESHOLD = getattr(app_config, "CUSTOMER_VALUE_IMPROVEMENT_THRESHOLD", 0.20)
 CUSTOMER_VALUE_IMPROVEMENT_MIN_AMOUNT = getattr(app_config, "CUSTOMER_VALUE_IMPROVEMENT_MIN_AMOUNT", 500)
 CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD = getattr(app_config, "CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD", 0.20)
@@ -45,6 +49,7 @@ class CustomerHealthResult:
     new_customers: pd.DataFrame
     dormant_30: pd.DataFrame
     dormant_90: pd.DataFrame
+    dormant_lost_customers: pd.DataFrame
     value_decline: pd.DataFrame
     frequency_decline: pd.DataFrame
     risk_customers: pd.DataFrame
@@ -251,7 +256,7 @@ def get_customer_status_style(value: object) -> str:
     orange_values = {"中优先级", "中风险", "明显延迟"}
     yellow_values = {"轻度风险", "轻度延迟", "需要观察"}
     green_values = {"金额改善", "频次改善", "节奏恢复", "恢复正常", "持续稳定", "改善", "正常", "正常节奏"}
-    gray_values = {"数据不足", "暂无稳定频率基准", "稳定", "历史不足", "无"}
+    gray_values = {"数据不足", "暂无稳定频率基准", "稳定", "历史不足", "无", "长期沉睡", "沉睡", "高流失风险", "长期流失/待清理", "节奏严重偏离"}
     if text in red_values:
         return "background-color: #fde8e8; color: #991b1b; font-weight: 600;"
     if text in orange_values:
@@ -426,6 +431,72 @@ def dormant_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> tuple[p
     dormant_90 = result[result["未下单天数"].gt(90)].copy()
     dormant_90["风险类型"] = "90天未下单"
     return dormant_30[base_columns], dormant_90[base_columns]
+
+
+def dormant_or_lost_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.DataFrame:
+    profile, _ = _customer_profile(history_df, anchor)
+    if profile.empty:
+        return pd.DataFrame()
+    result = profile.copy()
+    result["未下单天数"] = pd.to_numeric(result["Days Since Last Order"], errors="coerce").fillna(0).clip(lower=0).astype(int)
+    result["_interval_ratio"] = pd.to_numeric(result["Interval Ratio"], errors="coerce")
+    dormant_mask = (
+        result["未下单天数"].gt(CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER)
+        | result["_interval_ratio"].gt(CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO)
+        | result["未下单天数"].gt(180)
+    )
+    result = result[dormant_mask].copy()
+    if result.empty:
+        return pd.DataFrame()
+
+    def dormancy_status(days: int, ratio: float | None) -> str:
+        if days > 365:
+            return "长期流失/待清理"
+        if days > 180:
+            return "高流失风险"
+        if days > CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER:
+            return "沉睡"
+        if pd.notna(ratio) and float(ratio) > CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO:
+            return "节奏严重偏离"
+        return "沉睡"
+
+    result["沉睡状态"] = result.apply(lambda row: dormancy_status(int(row["未下单天数"]), row["_interval_ratio"]), axis=1)
+    result["Health Status"] = "长期沉睡"
+    result["Trend Direction"] = "稳定"
+    result["风险类型"] = result["沉睡状态"]
+    result["_abc_order"] = result["ABC Class"].map(ABC_ORDER).fillna(9)
+    result = result.sort_values(["沉睡状态", "_abc_order", "历史累计销售额", "未下单天数"], ascending=[True, True, False, False])
+    return result[
+        [
+            "Customer Code",
+            "Customer Name",
+            "Customer Type",
+            "ABC Class",
+            "Health Status",
+            "Trend Direction",
+            "风险类型",
+            "沉睡状态",
+            "最近下单日期",
+            "未下单天数",
+            "Typical Order Interval Days",
+            "Typical Interval Source",
+            "Average Order Interval Days",
+            "Median Order Interval Days",
+            "Recent Median Interval Days",
+            "Interval Stability Score",
+            "Interval Stability Status",
+            "Expected Next Order Date",
+            "Days Since Last Order",
+            "Days Overdue",
+            "Interval Ratio",
+            "Interval Status",
+            "Historical Order Count",
+            "Recent 6 Months Order Count",
+            "历史累计销售额",
+            "最近一次订单金额",
+            "历史平均订单金额",
+        ]
+    ].reset_index(drop=True)
 
 
 def _window_sales(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
@@ -783,9 +854,11 @@ def merge_risk_customers(
             "Recent 6 Months Order Count",
             "最近4周销售额",
             "前4周销售额",
+            "绝对下降金额",
             "金额变化率",
             "最近8周订单数",
             "前8周订单数",
+            "订单数变化",
             "频次变化率",
             "历史累计销售额",
             "最近一次订单金额",
@@ -795,21 +868,77 @@ def merge_risk_customers(
     ].reset_index(drop=True)
 
 
-def follow_up_customers(risk_customers: pd.DataFrame, limit: int = 10) -> pd.DataFrame:
+def follow_up_customers(risk_customers: pd.DataFrame, dormant_lost_customers: pd.DataFrame | None = None, limit: int = 15) -> pd.DataFrame:
     if risk_customers is None or risk_customers.empty:
         return pd.DataFrame()
     result = risk_customers.copy()
+    dormant_codes: set[str] = set()
+    if dormant_lost_customers is not None and not dormant_lost_customers.empty:
+        dormant_codes = set(dormant_lost_customers["Customer Code"].dropna().astype(str))
+    result["_customer_code"] = result["Customer Code"].astype(str)
+    result["_historical_orders"] = pd.to_numeric(result["Historical Order Count"], errors="coerce").fillna(0)
+    result["_historical_sales"] = pd.to_numeric(result["历史累计销售额"], errors="coerce").fillna(0)
+    result["_days_since"] = pd.to_numeric(result["Days Since Last Order"], errors="coerce").fillna(0).clip(lower=0)
+    result["_typical_interval"] = pd.to_numeric(result["Typical Order Interval Days"], errors="coerce")
+    result["_interval_ratio"] = pd.to_numeric(result["Interval Ratio"], errors="coerce")
+    result["_value_decline_amount"] = pd.to_numeric(result["绝对下降金额"], errors="coerce").fillna(0)
+    result["_value_decline"] = pd.to_numeric(result["金额变化率"], errors="coerce")
+    result["_frequency_decline"] = pd.to_numeric(result["频次变化率"], errors="coerce")
+    result["_recent_activity"] = result["_days_since"].le(CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER)
+
+    base_mask = (
+        result["_historical_orders"].ge(CUSTOMER_MIN_ORDERS_FOR_INTERVAL)
+        & result["_typical_interval"].notna()
+        & result["_typical_interval"].gt(0)
+        & result["_days_since"].le(CUSTOMER_ACTIONABLE_MAX_DAYS_SINCE_ORDER)
+        & result["_historical_sales"].ge(CUSTOMER_ACTIONABLE_MIN_HISTORICAL_SALES)
+        & ~result["_customer_code"].isin(dormant_codes)
+    )
+    interval_candidate = result["_interval_ratio"].gt(CUSTOMER_ACTIONABLE_MIN_INTERVAL_RATIO) & result["_interval_ratio"].le(CUSTOMER_ACTIONABLE_MAX_INTERVAL_RATIO)
+    value_candidate = result["_value_decline"].le(-CUSTOMER_VALUE_DECLINE_THRESHOLD) & result["_recent_activity"]
+    frequency_candidate = result["_frequency_decline"].le(-CUSTOMER_FREQUENCY_DECLINE_THRESHOLD) & result["_recent_activity"]
+    result = result[base_mask & (interval_candidate | value_candidate | frequency_candidate)].copy()
+    if result.empty:
+        return pd.DataFrame()
+
     result["_priority_order"] = result["风险等级"].map(PRIORITY_ORDER).fillna(9)
     result["_abc_order"] = result["ABC Class"].map(ABC_ORDER).fillna(9)
-    result["_interval_ratio"] = pd.to_numeric(result["Interval Ratio"], errors="coerce").fillna(0)
-    result["_days_overdue"] = pd.to_numeric(result["Days Overdue"], errors="coerce").fillna(0)
-    result["_value_decline"] = pd.to_numeric(result["金额变化率"], errors="coerce").fillna(0)
-    result["_frequency_decline"] = pd.to_numeric(result["频次变化率"], errors="coerce").fillna(0)
+    result["_recoverable"] = 1
+    result["_ratio_distance"] = (result["_interval_ratio"].fillna(CUSTOMER_ACTIONABLE_MIN_INTERVAL_RATIO) - 2.2).abs()
+    result["_frequency_decline_abs"] = result["_frequency_decline"].fillna(0).abs()
     result = result.sort_values(
-        ["_priority_order", "_interval_ratio", "_days_overdue", "_abc_order", "历史累计销售额", "_value_decline", "_frequency_decline"],
-        ascending=[True, False, False, True, False, True, True],
+        [
+            "_recoverable",
+            "_priority_order",
+            "_abc_order",
+            "_historical_sales",
+            "_ratio_distance",
+            "_value_decline_amount",
+            "_frequency_decline_abs",
+            "_days_since",
+        ],
+        ascending=[False, True, True, False, True, False, False, False],
     )
-    return result.head(limit).drop(columns=["_priority_order", "_abc_order", "_interval_ratio", "_days_overdue", "_value_decline", "_frequency_decline"], errors="ignore")
+    return result.head(limit).drop(
+        columns=[
+            "_customer_code",
+            "_historical_orders",
+            "_historical_sales",
+            "_days_since",
+            "_typical_interval",
+            "_interval_ratio",
+            "_value_decline_amount",
+            "_value_decline",
+            "_frequency_decline",
+            "_recent_activity",
+            "_priority_order",
+            "_abc_order",
+            "_recoverable",
+            "_ratio_distance",
+            "_frequency_decline_abs",
+        ],
+        errors="ignore",
+    )
 
 
 def build_customer_health(current_df: pd.DataFrame, history_df: pd.DataFrame) -> CustomerHealthResult:
@@ -819,23 +948,25 @@ def build_customer_health(current_df: pd.DataFrame, history_df: pd.DataFrame) ->
     anchor = analysis_cutoff(valid_current)
     if anchor is None:
         empty_active = ActiveCustomerMetrics(pd.Timestamp.today().normalize(), 0, None, None, None, None)
-        return CustomerHealthResult(empty_active, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), excluded, False)
+        return CustomerHealthResult(empty_active, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), excluded, False)
 
     active = active_customer_metrics(valid_history, anchor)
     new_customers = new_customer_table(valid_current, valid_history, anchor)
     dormant_30, dormant_90 = dormant_customers(valid_history, anchor)
+    dormant_lost = dormant_or_lost_customers(valid_history, anchor)
     value_decline = value_decline_customers(valid_history, anchor)
     frequency_decline = frequency_decline_customers(valid_history, anchor)
     interval_delay = interval_delay_customers(valid_history, anchor)
     improving = improvement_customers(valid_history, anchor)
     risk = merge_risk_customers(valid_history, anchor, dormant_30, dormant_90, value_decline, frequency_decline, interval_delay, improving)
-    follow_up = follow_up_customers(risk)
+    follow_up = follow_up_customers(risk, dormant_lost)
     _, abc_fallback = _customer_profile(valid_history, anchor)
     return CustomerHealthResult(
         active_metrics=active,
         new_customers=new_customers,
         dormant_30=dormant_30,
         dormant_90=dormant_90,
+        dormant_lost_customers=dormant_lost,
         value_decline=value_decline,
         frequency_decline=frequency_decline,
         risk_customers=risk,
