@@ -39,6 +39,12 @@ def inject_global_styles() -> None:
         .xf-section h3 {font-size: 1.05rem; margin-bottom: 0.15rem;}
         .xf-section p {color: #6b7280; margin-top: 0;}
         .xf-badge {display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 0.78rem; font-weight: 600;}
+        div[data-testid="column"] {min-width: 0;}
+        div[data-testid="stDataFrame"] * {overflow-wrap: anywhere;}
+        @media (max-width: 1100px) {
+            div[data-testid="stMetricValue"] {font-size: 1.25rem;}
+            div[data-testid="stMetric"] {min-height: 104px; padding: 12px;}
+        }
         </style>
         """,
         unsafe_allow_html=True,

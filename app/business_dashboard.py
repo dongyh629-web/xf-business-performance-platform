@@ -4,8 +4,13 @@ from dataclasses import dataclass
 from datetime import date
 
 import pandas as pd
+import streamlit as st
 
 from app.config import DATE_BASIS_LABELS
+from app.customer_health import active_customer_metrics
+from app.date_periods import WeekContext, week_context
+from app.product_range_metrics import RANGE_COLUMN, build_range_overview, safe_ratio
+from app.ui import kpi_grid, section_header
 
 
 def money(value: float) -> str:
@@ -28,6 +33,18 @@ class BusinessDashboardMetrics:
     year_end: pd.Timestamp | None
     monthly_sales: float
     annual_sales: float
+    today_sales: float
+    week_sales: float
+    previous_business_day_sales: float
+    previous_week_same_progress_sales: float
+    week_mom: float | None
+    today_orders: int
+    week_orders: int
+    month_orders: int
+    monthly_active_customers: int
+    week_active_customers: int
+    previous_month_sales: float
+    monthly_mom: float | None
     monthly_target: float
     annual_target: float
     monthly_completion: float | None
@@ -45,6 +62,7 @@ class BusinessDashboardMetrics:
     monthly_remaining_target: float
     annual_remaining_target: float
     required_daily_sales: float | None
+    week: WeekContext | None
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float | None:
@@ -57,6 +75,36 @@ def _business_days(start: pd.Timestamp, end: pd.Timestamp) -> int:
     if end < start:
         return 0
     return len(pd.bdate_range(start.normalize(), end.normalize()))
+
+
+def _sum_between(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> float:
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
+    return float(df.loc[mask, "Sales Amount"].sum())
+
+
+def _orders_between(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> int:
+    if "Order No." not in df.columns:
+        return 0
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
+    return int(df.loc[mask, "Order No."].nunique())
+
+
+def _customers_between(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> int:
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
+    customer_col = "Customer Code" if "Customer Code" in df.columns else "Customer"
+    if customer_col not in df.columns:
+        return 0
+    return int(df.loc[mask, customer_col].nunique())
+
+
+def _previous_business_day(anchor: pd.Timestamp) -> pd.Timestamp:
+    previous = anchor - pd.Timedelta(days=1)
+    while previous.weekday() >= 5:
+        previous -= pd.Timedelta(days=1)
+    return previous.normalize()
 
 
 def _calendar_year_start(anchor: pd.Timestamp) -> pd.Timestamp:
@@ -81,6 +129,18 @@ def calculate_business_dashboard_metrics(
             year_end=None,
             monthly_sales=0.0,
             annual_sales=0.0,
+            today_sales=0.0,
+            week_sales=0.0,
+            previous_business_day_sales=0.0,
+            previous_week_same_progress_sales=0.0,
+            week_mom=None,
+            today_orders=0,
+            week_orders=0,
+            month_orders=0,
+            monthly_active_customers=0,
+            week_active_customers=0,
+            previous_month_sales=0.0,
+            monthly_mom=None,
             monthly_target=float(monthly_target),
             annual_target=float(annual_target),
             monthly_completion=None,
@@ -98,6 +158,7 @@ def calculate_business_dashboard_metrics(
             monthly_remaining_target=max(float(monthly_target), 0.0),
             annual_remaining_target=max(float(annual_target), 0.0),
             required_daily_sales=None,
+            week=None,
         )
 
     anchor = valid["Performance Date"].max().normalize()
@@ -106,21 +167,44 @@ def calculate_business_dashboard_metrics(
     year_start = _calendar_year_start(anchor)
     year_end = pd.Timestamp(year=anchor.year, month=12, day=31)
 
-    month_mask = valid["Performance Date"].between(month_start, month_end, inclusive="both")
-    annual_ytd_mask = valid["Performance Date"].between(year_start, anchor, inclusive="both")
-
     previous_month_start = month_start - pd.DateOffset(years=1)
-    previous_month_end = month_end - pd.DateOffset(years=1)
+    previous_month_end_full = previous_month_start + pd.offsets.MonthEnd(0)
+    previous_month_end = pd.Timestamp(
+        year=previous_month_start.year,
+        month=previous_month_start.month,
+        day=min(anchor.day, int(previous_month_end_full.day)),
+    )
     previous_year_start = year_start - pd.DateOffset(years=1)
     previous_year_anchor = anchor - pd.DateOffset(years=1)
+    previous_calendar_month = month_start - pd.DateOffset(months=1)
+    previous_calendar_month_start = pd.Timestamp(year=previous_calendar_month.year, month=previous_calendar_month.month, day=1)
+    previous_calendar_month_end_full = previous_calendar_month_start + pd.offsets.MonthEnd(0)
+    previous_calendar_month_end = pd.Timestamp(
+        year=previous_calendar_month_start.year,
+        month=previous_calendar_month_start.month,
+        day=min(anchor.day, int(previous_calendar_month_end_full.day)),
+    )
+    week = week_context(anchor)
+    previous_day = _previous_business_day(anchor)
 
-    previous_month_mask = valid["Performance Date"].between(previous_month_start, previous_month_end, inclusive="both")
-    previous_year_ytd_mask = valid["Performance Date"].between(previous_year_start, previous_year_anchor, inclusive="both")
+    today_sales = _sum_between(valid, anchor, anchor)
+    week_sales = _sum_between(valid, week.week_start, week.week_cutoff)
+    previous_business_day_sales = _sum_between(valid, previous_day, previous_day)
+    previous_week_same_progress_sales = _sum_between(valid, week.previous_week_start, week.previous_week_cutoff)
+    monthly_sales = _sum_between(valid, month_start, anchor)
+    annual_sales = _sum_between(valid, year_start, anchor)
+    previous_month_sales = _sum_between(valid, previous_month_start, previous_month_end)
+    previous_calendar_month_sales = _sum_between(valid, previous_calendar_month_start, previous_calendar_month_end)
+    previous_year_ytd_sales = _sum_between(valid, previous_year_start, previous_year_anchor)
 
-    monthly_sales = float(valid.loc[month_mask, "Sales Amount"].sum())
-    annual_sales = float(valid.loc[annual_ytd_mask, "Sales Amount"].sum())
-    previous_month_sales = float(valid.loc[previous_month_mask, "Sales Amount"].sum())
-    previous_year_ytd_sales = float(valid.loc[previous_year_ytd_mask, "Sales Amount"].sum())
+    today_orders = _orders_between(valid, anchor, anchor)
+    week_orders = _orders_between(valid, week.week_start, week.week_cutoff)
+    month_orders = _orders_between(valid, month_start, anchor)
+    week_active_customers = _customers_between(valid, week.week_start, week.week_cutoff)
+    try:
+        monthly_active_customers = int(active_customer_metrics(valid, anchor).current_active)
+    except Exception:
+        monthly_active_customers = _customers_between(valid, month_start, anchor)
 
     elapsed_workdays = _business_days(month_start, anchor)
     total_workdays = _business_days(month_start, month_end)
@@ -141,6 +225,18 @@ def calculate_business_dashboard_metrics(
         year_end=year_end,
         monthly_sales=monthly_sales,
         annual_sales=annual_sales,
+        today_sales=today_sales,
+        week_sales=week_sales,
+        previous_business_day_sales=previous_business_day_sales,
+        previous_week_same_progress_sales=previous_week_same_progress_sales,
+        week_mom=_safe_ratio(week_sales - previous_week_same_progress_sales, previous_week_same_progress_sales),
+        today_orders=today_orders,
+        week_orders=week_orders,
+        month_orders=month_orders,
+        monthly_active_customers=monthly_active_customers,
+        week_active_customers=week_active_customers,
+        previous_month_sales=previous_calendar_month_sales,
+        monthly_mom=_safe_ratio(monthly_sales - previous_calendar_month_sales, previous_calendar_month_sales),
         monthly_target=float(monthly_target),
         annual_target=float(annual_target),
         monthly_completion=monthly_completion,
@@ -158,7 +254,27 @@ def calculate_business_dashboard_metrics(
         monthly_remaining_target=monthly_remaining,
         annual_remaining_target=max(float(annual_target) - annual_sales, 0.0),
         required_daily_sales=_safe_ratio(monthly_remaining, float(remaining_workdays)),
+        week=week,
     )
+
+
+@st.cache_data(show_spinner=False)
+def cached_business_dashboard_metrics(
+    df: pd.DataFrame,
+    monthly_target: float,
+    annual_target: float,
+) -> BusinessDashboardMetrics:
+    return calculate_business_dashboard_metrics(df, monthly_target, annual_target)
+
+
+@st.cache_data(show_spinner=False)
+def cached_monthly_range_overview(df: pd.DataFrame, amount_targets: pd.DataFrame | None):
+    return build_range_overview(df, amount_targets)
+
+
+@st.cache_data(show_spinner=False)
+def cached_range_week_table(df: pd.DataFrame, week: WeekContext) -> pd.DataFrame:
+    return _range_week_table(df, week)
 
 
 def _format_percent(value: float | None) -> str:
@@ -253,6 +369,138 @@ def generate_business_summary(metrics: BusinessDashboardMetrics) -> str:
     return f"本月销售完成 {_format_percent(metrics.monthly_completion)}，工作日进度基本匹配，同比下降 {_format_percent(abs(metrics.monthly_yoy))}。"
 
 
+def _metric_status(value: float | None, good_at_zero: bool = False) -> str:
+    if value is None:
+        return "无可比基数"
+    if good_at_zero and value >= -0.05:
+        return "基本正常"
+    if value >= 0.10:
+        return "明显改善"
+    if value >= -0.05:
+        return "基本正常"
+    return "需要关注"
+
+
+def _format_delta(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return _format_percent(value)
+
+
+def _format_date_range(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    return f"{start.date()} 至 {end.date()}"
+
+
+def _monthly_range_overview(df: pd.DataFrame) -> tuple[pd.DataFrame, object | None]:
+    try:
+        import streamlit as st
+
+        amount_targets = st.session_state.get("target_amount_data")
+    except Exception:
+        amount_targets = None
+    if RANGE_COLUMN not in df.columns:
+        return pd.DataFrame(), None
+    return build_range_overview(df, amount_targets)
+
+
+def _range_week_table(df: pd.DataFrame, week: WeekContext) -> pd.DataFrame:
+    if RANGE_COLUMN not in df.columns:
+        return pd.DataFrame()
+    work = df.copy()
+    work[RANGE_COLUMN] = work[RANGE_COLUMN].fillna("未分类").astype(str)
+    dates = pd.to_datetime(work["Performance Date"], errors="coerce").dt.normalize()
+    current_mask = dates.between(week.week_start, week.week_cutoff, inclusive="both")
+    previous_mask = dates.between(week.previous_week_start, week.previous_week_cutoff, inclusive="both")
+    current = work.loc[current_mask].groupby(RANGE_COLUMN, dropna=False)["Sales Amount"].sum().rename("Current Week")
+    previous = work.loc[previous_mask].groupby(RANGE_COLUMN, dropna=False)["Sales Amount"].sum().rename("Previous Week Same Progress")
+    table = pd.concat([current, previous], axis=1).fillna(0).reset_index()
+    table["Change"] = table["Current Week"] - table["Previous Week Same Progress"]
+    table["Rate"] = table.apply(lambda row: safe_ratio(row["Change"], row["Previous Week Same Progress"]), axis=1)
+    return table
+
+
+def _render_weekly_summary(df: pd.DataFrame, metrics: BusinessDashboardMetrics) -> None:
+    import streamlit as st
+
+    if metrics.week is None:
+        return
+    week = metrics.week
+    section_header("本周经营摘要", "Weekly Business Summary")
+    range_week = cached_range_week_table(df, week)
+    top_growth = range_week[range_week["Change"].gt(0)].sort_values("Change", ascending=False).head(3)
+    top_decline = range_week[range_week["Change"].lt(0)].sort_values("Change").head(3)
+    top_contribution = range_week.sort_values("Current Week", ascending=False).head(1)
+    focus = range_week[
+        (range_week["Change"].lt(0)) & (range_week["Current Week"].gt(0) | range_week["Previous Week Same Progress"].gt(0))
+    ].sort_values("Change").head(3)
+
+    st.markdown(
+        f"**Week {week.iso_week}，截至 {week.anchor:%-m 月 %-d 日}：** "
+        f"本周销售 {money(metrics.week_sales)}，较上周同期"
+        f"{'无可比基数' if metrics.week_mom is None else _format_percent(metrics.week_mom)}；"
+        f"本周订单 {metrics.week_orders:,} 单，活跃客户 {metrics.week_active_customers:,} 个。"
+    )
+    cols = st.columns(4)
+    with cols[0]:
+        st.caption("增长贡献")
+        if top_growth.empty:
+            st.write("暂无增长贡献")
+        for _, row in top_growth.iterrows():
+            st.write(f"{row[RANGE_COLUMN]}  {money(row['Change'])}")
+    with cols[1]:
+        st.caption("下降拖累")
+        if top_decline.empty:
+            st.write("暂无下降拖累")
+        for _, row in top_decline.iterrows():
+            st.write(f"{row[RANGE_COLUMN]}  {money(row['Change'])}")
+    with cols[2]:
+        st.caption("销售贡献最高")
+        for _, row in top_contribution.iterrows():
+            st.write(f"{row[RANGE_COLUMN]}  {money(row['Current Week'])}")
+    with cols[3]:
+        st.caption("当前需要关注")
+        if focus.empty:
+            st.write("暂无明显下降系列")
+        else:
+            st.write("、".join(focus[RANGE_COLUMN].astype(str).tolist()))
+
+
+def _render_range_snapshot(df: pd.DataFrame) -> None:
+    import streamlit as st
+
+    overview, _ = _monthly_range_overview(df)
+    if overview.empty:
+        return
+    section_header("产品系列速览", "Top / Risk Snapshot")
+    unconfigured = int(overview["Monthly Target"].isna().sum()) if "Monthly Target" in overview.columns else 0
+
+    def render_list(title: str, data: pd.DataFrame, value_col: str, rate_col: str | None = None) -> None:
+        st.caption(title)
+        if data.empty:
+            st.write("暂无数据")
+            return
+        for _, row in data.iterrows():
+            rate_text = "" if rate_col is None else f" | {_format_percent(row[rate_col]) if pd.notna(row[rate_col]) else '无基数'}"
+            st.write(f"**{row[RANGE_COLUMN]}**  {money(row[value_col])}{rate_text}")
+
+    top_sales = overview.sort_values("Current Month Sales", ascending=False).head(5)
+    top_growth = overview[pd.to_numeric(overview["YoY Rate"], errors="coerce").notna()].sort_values("YoY Rate", ascending=False).head(3)
+    top_decline = overview[pd.to_numeric(overview["YoY Rate"], errors="coerce").notna()].sort_values("YoY Rate", ascending=True).head(3)
+    lowest_completion = overview[pd.to_numeric(overview["Target Completion"], errors="coerce").notna()].sort_values("Target Completion").head(3)
+
+    cols = st.columns(5)
+    with cols[0]:
+        render_list("本月销售额 Top 5", top_sales, "Current Month Sales")
+    with cols[1]:
+        render_list("同比增长 Top 3", top_growth, "Current Month Sales", "YoY Rate")
+    with cols[2]:
+        render_list("同比下降 Top 3", top_decline, "Current Month Sales", "YoY Rate")
+    with cols[3]:
+        render_list("目标完成率最低 Top 3", lowest_completion, "Current Month Sales", "Target Completion")
+    with cols[4]:
+        st.metric("未配置目标系列", f"{unconfigured:,}")
+
+
 def _scope_text(df: pd.DataFrame) -> str:
     customer_types = df.attrs.get("customer_types", [])
     product_groups = df.attrs.get("product_groups", [])
@@ -266,8 +514,6 @@ def _scope_text(df: pd.DataFrame) -> str:
 
 
 def render_business_dashboard(df: pd.DataFrame) -> None:
-    import streamlit as st
-
     session_monthly_target, session_annual_target, target_source = _session_targets_for_anchor(df)
     with st.sidebar:
         with st.expander("经营目标", expanded=True):
@@ -298,7 +544,7 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
                 st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
             st.caption("年度范围为1月1日至12月31日。")
 
-    metrics = calculate_business_dashboard_metrics(df, monthly_target, annual_target)
+    metrics = cached_business_dashboard_metrics(df, monthly_target, annual_target)
     if metrics.anchor_date is None:
         st.info("当前筛选结果没有有效日期，无法计算经营驾驶舱指标。")
         return
@@ -324,14 +570,67 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
         if metrics.monthly_target <= 0:
             st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
 
-    st.markdown("#### 本月核心指标")
-    month_cols = st.columns(4)
-    month_cols[0].metric("本月销售额", money(metrics.monthly_sales))
-    month_cols[1].metric("本月完成率", _format_percent(metrics.monthly_completion))
-    month_cols[2].metric("本月同比", _format_percent(metrics.monthly_yoy))
-    month_cols[3].metric("Pace 差值", _format_signed_points(metrics.pace_gap), help="销售完成进度 - 工作日进度")
+    section_header("销售时间尺度总览")
+    kpi_grid(
+        [
+            {
+                "label": "今日销售额",
+                "value": money(metrics.today_sales),
+                "delta": _format_delta(_safe_ratio(metrics.today_sales - metrics.previous_business_day_sales, metrics.previous_business_day_sales)),
+                "caption": f"分析日期：{metrics.anchor_date}",
+                "help": "对比上一可比工作日。",
+            },
+            {
+                "label": "本周销售额",
+                "value": money(metrics.week_sales),
+                "delta": _format_delta(metrics.week_mom),
+                "caption": _format_date_range(metrics.week.week_start, metrics.week.week_end) if metrics.week else "",
+                "help": "当前周按周一至分析截止日，对比上周相同进度。",
+            },
+            {
+                "label": "本月销售额",
+                "value": money(metrics.monthly_sales),
+                "delta": _format_delta(metrics.monthly_yoy),
+                "caption": f"{metrics.month_start.date()} 至 {metrics.anchor_date}",
+                "help": "对比去年同月同日进度。",
+            },
+            {
+                "label": "年度累计销售额",
+                "value": money(metrics.annual_sales),
+                "delta": _format_delta(metrics.annual_ytd_yoy),
+                "caption": f"{metrics.year_start.date()} 至 {metrics.anchor_date}",
+                "help": "自然年累计，对比去年同期累计。",
+            },
+        ],
+        columns=4,
+    )
+
+    section_header("订单和客户")
+    kpi_grid(
+        [
+            {"label": "今日订单数", "value": f"{metrics.today_orders:,}", "caption": "按 Order No. 去重"},
+            {"label": "本周订单数", "value": f"{metrics.week_orders:,}", "caption": "周一至分析截止日"},
+            {"label": "本月订单数", "value": f"{metrics.month_orders:,}", "caption": "本月 1 日至分析截止日"},
+            {"label": "当月活跃客户数", "value": f"{metrics.monthly_active_customers:,}", "caption": "沿用客户健康口径"},
+        ],
+        columns=4,
+    )
+
+    section_header("目标和增长")
+    kpi_grid(
+        [
+            {"label": "本月目标完成率", "value": _format_percent(metrics.monthly_completion), "caption": _metric_status(metrics.monthly_completion)},
+            {"label": "Pace 差值", "value": _format_signed_points(metrics.pace_gap), "caption": "目标完成率 - 工作日进度"},
+            {"label": "本月同比", "value": _format_percent(metrics.monthly_yoy), "caption": _metric_status(metrics.monthly_yoy)},
+            {"label": "本月环比", "value": _format_percent(metrics.monthly_mom), "caption": _metric_status(metrics.monthly_mom)},
+        ],
+        columns=4,
+    )
 
     st.info(generate_business_summary(metrics))
+
+    _render_weekly_summary(df, metrics)
+    _render_range_snapshot(df)
 
     st.divider()
     st.markdown("#### 年度经营")

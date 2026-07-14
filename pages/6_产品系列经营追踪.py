@@ -8,7 +8,6 @@ import streamlit as st
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.product_range_metrics import (
     RANGE_COLUMN,
-    build_core_kpis,
     build_monthly_trend,
     build_range_overview,
     build_week_progress,
@@ -50,6 +49,7 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
         "本年累计销售额",
         "去年同期累计销售额",
         "本月目标",
+        "Annual Target",
         "距离目标差额",
     ]
     percent_cols = ["同比增长率", "环比增长率", "年累计同比", "目标完成率"]
@@ -60,6 +60,42 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
         if col in display.columns:
             display[col] = display[col].map(_fmt_percent)
     return display
+
+
+def _status_sort_value(value: object) -> int:
+    order = {"明显落后": 0, "需要关注": 1, "表现良好": 2, "稳定": 3, "数据不足": 4}
+    return order.get(str(value), 5)
+
+
+def _sort_overview(table: pd.DataFrame, sort_label: str) -> pd.DataFrame:
+    visible = table.copy()
+    if sort_label == "当前状态":
+        visible["_status_order"] = visible["当前状态"].map(_status_sort_value)
+        return visible.sort_values(["_status_order", "本月销售额"], ascending=[True, False], na_position="last").drop(columns=["_status_order"])
+    ascending = sort_label in {"目标完成率"}
+    return visible.sort_values(sort_label, ascending=ascending, na_position="last")
+
+
+def _compact_name(value: object, limit: int = 26) -> str:
+    text = "未分类" if pd.isna(value) else str(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _summary_table(data: pd.DataFrame) -> pd.DataFrame:
+    columns = ["产品系列", "本月销售额", "同比增长率", "目标完成率", "距离目标差额", "当前状态"]
+    if data.empty:
+        return pd.DataFrame(columns=columns)
+    return _display_table(data[columns].copy())
+
+
+def _render_summary_block(title: str, data: pd.DataFrame) -> None:
+    st.caption(title)
+    if data.empty:
+        st.write("暂无数据")
+        return
+    display = _summary_table(data.head(5)).copy()
+    display["产品系列"] = display["产品系列"].map(_compact_name)
+    st.dataframe(display.style.map(status_style, subset=["当前状态"]), width="stretch", hide_index=True, height=220)
 
 
 def _range_label_options(df: pd.DataFrame) -> list[str]:
@@ -146,19 +182,20 @@ range_options = _range_label_options(filtered)
 selected_range = filter_cols[2].selectbox("产品系列", range_options)
 
 section_header("核心 KPI", "本月与去年同期、上月同期和系列目标的对比。")
-kpis = build_core_kpis(overview if selected_range == "全部" else overview[overview[RANGE_COLUMN].eq(selected_range)])
+selected_overview = overview if selected_range == "全部" else overview[overview[RANGE_COLUMN].eq(selected_range)]
+configured_targets = selected_overview["Monthly Target"].notna() if "Monthly Target" in selected_overview.columns else pd.Series(dtype=bool)
 kpi_grid(
     [
-        {"label": "本月系列总销售额", "value": _fmt_money(kpis.get("current_sales")), "caption": "当前筛选范围"},
-        {"label": "去年同期销售额", "value": _fmt_money(kpis.get("previous_year_sales")), "delta": _fmt_percent(kpis.get("yoy")), "caption": "同月同日进度"},
-        {"label": "上月同期销售额", "value": _fmt_money(kpis.get("previous_month_sales")), "delta": _fmt_percent(kpis.get("mom")), "caption": "环比为上月同日进度"},
-        {"label": "本月目标", "value": _fmt_money(kpis.get("monthly_target")), "delta": _fmt_percent(kpis.get("completion")), "caption": "未配置则不拆分公司目标"},
-        {"label": "距离目标差额", "value": _fmt_money(kpis.get("target_gap")), "caption": "实际销售 - 系列目标"},
+        {"label": "当前筛选范围销售额", "value": _fmt_money(selected_overview["Current Month Sales"].sum() if not selected_overview.empty else 0), "caption": "本月 1 日至分析截止日"},
+        {"label": "增长系列数量", "value": f"{int(selected_overview['YoY Rate'].gt(0).sum()):,}", "caption": "同比为正"},
+        {"label": "下降系列数量", "value": f"{int(selected_overview['YoY Rate'].lt(0).sum()):,}", "caption": "同比为负"},
+        {"label": "达标系列数量", "value": f"{int(selected_overview['Target Completion'].ge(1).sum()):,}", "caption": "完成率 >= 100%"},
+        {"label": "需要关注系列数量", "value": f"{int(selected_overview['Status'].isin(['明显落后', '需要关注']).sum()):,}", "caption": "按状态规则"},
+        {"label": "未配置目标系列数量", "value": f"{int((~configured_targets).sum()) if len(configured_targets) else 0:,}", "caption": "未拆分公司目标"},
     ],
-    columns=5,
+    columns=3,
 )
 
-section_header("系列经营总览表", "按系列查看销售、同比、环比、目标完成率和当前状态。")
 table = overview.rename(
     columns={
         RANGE_COLUMN: "产品系列",
@@ -172,6 +209,7 @@ table = overview.rename(
         "Previous YTD Sales": "去年同期累计销售额",
         "YTD YoY": "年累计同比",
         "Monthly Target": "本月目标",
+        "Annual Target": "Annual Target",
         "Target Completion": "目标完成率",
         "Target Gap": "距离目标差额",
         "Status": "当前状态",
@@ -180,16 +218,44 @@ table = overview.rename(
 if table.empty:
     st.info("当前筛选范围内没有产品系列销售。")
 else:
-    status_options = sorted(table["当前状态"].dropna().unique().tolist())
-    selected_status = st.multiselect("状态筛选", status_options, default=status_options)
-    visible = table[table["当前状态"].isin(selected_status)].copy()
     if selected_range != "全部":
-        visible = visible[visible["产品系列"].eq(selected_range)]
-    sort_label = st.selectbox("排序", ["本月销售额", "同比增长率", "目标完成率", "当前状态"])
-    ascending = sort_label == "当前状态"
-    visible = visible.sort_values(sort_label, ascending=ascending, na_position="last")
+        table = table[table["产品系列"].eq(selected_range)].copy()
+
+    section_header("Top / Risk 摘要", "先看规模、增长、下降和目标进度落后系列。")
+    top_sales = table.sort_values("本月销售额", ascending=False).head(5)
+    top_growth = table[pd.to_numeric(table["同比增长率"], errors="coerce").notna()].sort_values("同比增长率", ascending=False).head(5)
+    top_decline = table[pd.to_numeric(table["同比增长率"], errors="coerce").notna()].sort_values("同比增长率").head(5)
+    target_lag = table[pd.to_numeric(table["目标完成率"], errors="coerce").notna()].sort_values(["目标完成率", "距离目标差额"], ascending=[True, True]).head(5)
+    summary_cols = st.columns(4)
+    with summary_cols[0]:
+        _render_summary_block("销售额 Top 5", top_sales)
+    with summary_cols[1]:
+        _render_summary_block("同比增长 Top 5", top_growth)
+    with summary_cols[2]:
+        _render_summary_block("同比下降 Top 5", top_decline)
+    with summary_cols[3]:
+        _render_summary_block("目标进度落后 Top 5", target_lag)
+
+    section_header("精简系列经营总览表", "默认只显示最重要的 9 个字段，状态放在第二列。")
+    status_options = sorted(table["当前状态"].dropna().unique().tolist())
+    control_cols = st.columns([2, 1])
+    selected_status = control_cols[0].multiselect("状态筛选", status_options, default=status_options)
+    sort_label = control_cols[1].selectbox("排序", ["当前状态", "本月销售额", "同比增长率", "目标完成率", "距离目标差额"])
+    visible = table[table["当前状态"].isin(selected_status)].copy()
+    visible = _sort_overview(visible, sort_label)
+    compact_columns = [
+        "产品系列",
+        "当前状态",
+        "本月销售额",
+        "本月目标",
+        "目标完成率",
+        "距离目标差额",
+        "同比增长率",
+        "环比增长率",
+        "年累计同比",
+    ]
     st.dataframe(
-        _display_table(visible).style.map(status_style, subset=["当前状态"]),
+        _display_table(visible[compact_columns]).style.map(status_style, subset=["当前状态"]),
         width="stretch",
         hide_index=True,
     )
@@ -274,3 +340,28 @@ if detail_range:
     with col2:
         st.caption("Top 10 贡献客户下降")
         st.dataframe(customer_decline.rename(columns={customer_dimension: "客户", "Current": "本月", "Previous": "去年同期", "Change": "差额"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 差额=lambda data: data["差额"].map(_fmt_money)), width="stretch", hide_index=True)
+
+if "table" in locals() and not table.empty:
+    with st.expander("查看完整指标明细", expanded=False):
+        detail_columns = [
+            "产品系列",
+            "当前状态",
+            "本月销售额",
+            "去年同期销售额",
+            "上月同期销售额",
+            "本年累计销售额",
+            "去年同期累计销售额",
+            "本月目标",
+            "Annual Target",
+            "同比增长额",
+            "同比增长率",
+            "环比增长率",
+            "年累计同比",
+            "目标完成率",
+            "距离目标差额",
+        ]
+        st.dataframe(
+            _display_table(table[detail_columns]).style.map(status_style, subset=["当前状态"]),
+            width="stretch",
+            hide_index=True,
+        )

@@ -67,14 +67,14 @@ def analysis_context(df: pd.DataFrame, year: int | None = None, month: int | Non
 
 
 def _range_series(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.Series:
-    dates = pd.to_datetime(df["Performance Date"], errors="coerce")
-    mask = dates.between(start, end, inclusive="both")
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
     return df.loc[mask].groupby(RANGE_COLUMN, dropna=False)["Sales Amount"].sum()
 
 
 def _total_between(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> float:
-    dates = pd.to_datetime(df["Performance Date"], errors="coerce")
-    mask = dates.between(start, end, inclusive="both")
+    dates = pd.to_datetime(df["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
     return float(df.loc[mask, "Sales Amount"].sum())
 
 
@@ -247,7 +247,8 @@ def build_week_progress(df: pd.DataFrame, amount_targets: pd.DataFrame | None, c
     work[RANGE_COLUMN] = work[RANGE_COLUMN].fillna("未分类").astype(str)
     if product_range and product_range != "全部":
         work = work[work[RANGE_COLUMN].eq(product_range)]
-    month_rows = work[pd.to_datetime(work["Performance Date"], errors="coerce").between(ctx.month_start, ctx.month_end, inclusive="both")].copy()
+    work_dates = pd.to_datetime(work["Performance Date"], errors="coerce").dt.normalize()
+    month_rows = work[work_dates.between(ctx.month_start, ctx.month_end, inclusive="both")].copy()
     if month_rows.empty:
         return pd.DataFrame()
     month_rows["Week"] = ((pd.to_datetime(month_rows["Performance Date"]).dt.day - 1) // 7 + 1).clip(upper=5)
@@ -258,7 +259,7 @@ def build_week_progress(df: pd.DataFrame, amount_targets: pd.DataFrame | None, c
     weekly["Month Cumulative Sales"] = weekly["Weekly Sales"].cumsum()
     previous_end_day = min(ctx.month_end.day, int((ctx.previous_year_start + pd.offsets.MonthEnd(0)).day))
     previous = work[
-        pd.to_datetime(work["Performance Date"], errors="coerce").between(
+        work_dates.between(
             ctx.previous_year_start,
             pd.Timestamp(year=ctx.year - 1, month=ctx.month, day=previous_end_day),
             inclusive="both",
@@ -292,8 +293,9 @@ def top_contributors(df: pd.DataFrame, dimension: str, ctx: RangeContext, produc
     work[RANGE_COLUMN] = work[RANGE_COLUMN].fillna("未分类").astype(str)
     if product_range and product_range != "全部":
         work = work[work[RANGE_COLUMN].eq(product_range)]
-    current = work[pd.to_datetime(work["Performance Date"], errors="coerce").between(ctx.month_start, ctx.month_end, inclusive="both")]
-    previous = work[pd.to_datetime(work["Performance Date"], errors="coerce").between(ctx.previous_year_start, ctx.previous_year_end, inclusive="both")]
+    dates = pd.to_datetime(work["Performance Date"], errors="coerce").dt.normalize()
+    current = work[dates.between(ctx.month_start, ctx.month_end, inclusive="both")]
+    previous = work[dates.between(ctx.previous_year_start, ctx.previous_year_end, inclusive="both")]
     current_series = current.groupby(dimension, dropna=False)["Sales Amount"].sum().rename("Current")
     previous_series = previous.groupby(dimension, dropna=False)["Sales Amount"].sum().rename("Previous")
     table = pd.concat([current_series, previous_series], axis=1).fillna(0).reset_index()
