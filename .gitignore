@@ -17,6 +17,9 @@ __pycache__/
 .env.*
 .streamlit/secrets.toml
 .streamlit/credentials.toml
+token.json
+oauth_token.json
+refresh_token.txt
 
 # Business data and local generated artifacts
 data/*

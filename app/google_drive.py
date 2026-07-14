@@ -24,7 +24,10 @@ class DriveUserError(RuntimeError):
 
 @dataclass(frozen=True)
 class DriveConfig:
-    service_account_info: dict[str, Any]
+    client_id: str
+    client_secret: str
+    refresh_token: str
+    token_uri: str
     folder_id: str
     sales_file_name: str
     target_file_name: str
@@ -88,26 +91,26 @@ def get_drive_config(secrets: Any | None = None) -> DriveConfig:
             raise DriveUserError("尚未配置 Google Drive Secrets。") from exc
 
     try:
-        gcp_section = _to_plain_dict(secrets["gcp_service_account"])
+        oauth_section = _to_plain_dict(secrets["google_oauth"])
         drive_section = _to_plain_dict(secrets["google_drive"])
     except Exception as exc:
-        raise DriveUserError("尚未配置 Google Drive Secrets。") from exc
+        raise DriveUserError("尚未配置 Google OAuth Secrets。") from exc
 
-    required_account_fields = ["type", "project_id", "private_key", "client_email", "token_uri"]
-    missing_account = [field for field in required_account_fields if not gcp_section.get(field)]
-    if missing_account:
-        raise DriveUserError(f"Google Service Account Secrets 缺少字段：{', '.join(missing_account)}。")
+    required_oauth_fields = ["client_id", "client_secret", "refresh_token"]
+    missing_oauth = [field for field in required_oauth_fields if not oauth_section.get(field)]
+    if missing_oauth:
+        raise DriveUserError(f"Google OAuth Secrets 缺少字段：{', '.join(missing_oauth)}。")
 
     folder_id = str(drive_section.get("folder_id", "")).strip()
     if not folder_id:
         raise DriveUserError("Google Drive Secrets 缺少 folder_id。")
 
-    account_info = dict(gcp_section)
-    private_key = str(account_info.get("private_key", ""))
-    account_info["private_key"] = private_key.replace("\\n", "\n")
-
     return DriveConfig(
-        service_account_info=account_info,
+        client_id=str(oauth_section["client_id"]).strip(),
+        client_secret=str(oauth_section["client_secret"]).strip(),
+        refresh_token=str(oauth_section["refresh_token"]).strip(),
+        token_uri=str(oauth_section.get("token_uri", "https://oauth2.googleapis.com/token")).strip()
+        or "https://oauth2.googleapis.com/token",
         folder_id=folder_id,
         sales_file_name=str(drive_section.get("sales_file_name", "XF_Sales_Latest.xlsx")).strip() or "XF_Sales_Latest.xlsx",
         target_file_name=str(drive_section.get("target_file_name", "XF_Targets_Latest.xlsx")).strip() or "XF_Targets_Latest.xlsx",
@@ -116,20 +119,33 @@ def get_drive_config(secrets: Any | None = None) -> DriveConfig:
 
 def get_drive_service(config: DriveConfig):
     try:
-        from google.oauth2 import service_account
+        from google.auth.exceptions import RefreshError
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
     except ImportError as exc:
         raise DriveUserError("缺少 Google Drive 读取依赖，请确认 requirements.txt 已安装 google-api-python-client 和 google-auth。") from exc
 
     try:
-        credentials = service_account.Credentials.from_service_account_info(
-            config.service_account_info,
+        credentials = Credentials(
+            token=None,
+            refresh_token=config.refresh_token,
+            token_uri=config.token_uri,
+            client_id=config.client_id,
+            client_secret=config.client_secret,
             scopes=[DRIVE_SCOPE],
         )
+        credentials.refresh(Request())
         return build("drive", "v3", credentials=credentials, cache_discovery=False)
+    except RefreshError as exc:
+        logger.warning("Google OAuth refresh failed: %s", exc.__class__.__name__)
+        text = str(exc).lower()
+        if "invalid_grant" in text:
+            raise DriveUserError("Google Drive 授权已失效，请管理员重新完成一次 OAuth 授权。") from exc
+        raise DriveUserError("Google Drive access token 刷新失败，请检查 OAuth refresh token 是否仍然有效。") from exc
     except Exception as exc:
         logger.exception("Google Drive service initialization failed")
-        raise DriveUserError("Google Drive 连接失败，请检查 Service Account Secrets 是否完整有效。") from exc
+        raise DriveUserError("Google Drive 连接失败，请检查 OAuth Client ID、Client Secret 和 Refresh Token 是否完整有效。") from exc
 
 
 def _escape_drive_query_value(value: str) -> str:
