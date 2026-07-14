@@ -194,12 +194,43 @@ def _total_sales_between(data: pd.DataFrame, start: pd.Timestamp, end: pd.Timest
     return float(pd.to_numeric(work.loc[mask, "Sales Amount"], errors="coerce").fillna(0).sum())
 
 
-def _render_total_summary(table: pd.DataFrame, filtered_data: pd.DataFrame, ctx, product_range: str | None) -> None:
+def _prior_full_month_from_targets(amount_targets: pd.DataFrame | None, ctx, product_range: str | None) -> float | None:
+    if amount_targets is None or amount_targets.empty or "Previous Year Actual" not in amount_targets.columns:
+        return None
+    required = {"Year", "Month", RANGE_COLUMN}
+    if not required.issubset(amount_targets.columns):
+        return None
+    rows = amount_targets[
+        amount_targets["Year"].astype("Int64").eq(int(ctx.year))
+        & amount_targets["Month"].astype("Int64").eq(int(ctx.month))
+    ].copy()
+    if rows.empty:
+        return None
+    if product_range and product_range != "全部":
+        rows = rows[rows[RANGE_COLUMN].astype(str).eq(str(product_range))]
+    else:
+        company_rows = rows[rows[RANGE_COLUMN].astype(str).eq("公司整体")]
+        rows = company_rows if not company_rows.empty else rows[~rows[RANGE_COLUMN].astype(str).eq("公司整体")]
+    values = pd.to_numeric(rows["Previous Year Actual"], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.sum())
+
+
+def _render_total_summary(
+    table: pd.DataFrame,
+    filtered_data: pd.DataFrame,
+    amount_targets: pd.DataFrame | None,
+    ctx,
+    product_range: str | None,
+) -> None:
     current_sales = float(pd.to_numeric(table["本月销售额"], errors="coerce").fillna(0).sum())
     previous_sales = float(pd.to_numeric(table["去年同期销售额"], errors="coerce").fillna(0).sum())
     prior_full_start = pd.Timestamp(year=ctx.year - 1, month=ctx.month, day=1)
     prior_full_end = prior_full_start + pd.offsets.MonthEnd(0)
-    prior_full_sales = _total_sales_between(filtered_data, prior_full_start, prior_full_end, product_range)
+    prior_full_sales = _prior_full_month_from_targets(amount_targets, ctx, product_range)
+    if prior_full_sales is None:
+        prior_full_sales = _total_sales_between(filtered_data, prior_full_start, prior_full_end, product_range)
     prior_full_gap = None if prior_full_sales == 0 else current_sales - prior_full_sales
     targets = pd.to_numeric(table["本月目标"], errors="coerce").dropna()
     monthly_target = None if targets.empty else float(targets.sum())
@@ -405,7 +436,7 @@ else:
     if selected_range != "全部":
         table = table[table["产品系列"].eq(selected_range)].copy()
 
-    _render_total_summary(table, filtered, ctx, selected_range)
+    _render_total_summary(table, filtered, amount_targets, ctx, selected_range)
 
     section_header("精简系列经营总览表")
     status_options = sorted(table["当前状态"].dropna().unique().tolist())
