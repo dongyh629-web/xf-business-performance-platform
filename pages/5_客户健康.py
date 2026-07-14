@@ -48,6 +48,12 @@ def _format_ratio(value) -> str:
     return f"{float(value):.1f}x"
 
 
+def _format_score(value) -> str:
+    if pd.isna(value):
+        return "历史不足"
+    return f"{float(value):.2f}"
+
+
 def _csv_bytes(df: pd.DataFrame) -> bytes:
     export = df.copy()
     for column in export.columns:
@@ -82,7 +88,7 @@ def _scope_text(filtered: pd.DataFrame) -> str:
 
 def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
     display = df.copy()
-    for column in ["最近下单日期"]:
+    for column in ["最近下单日期", "Expected Next Order Date"]:
         if column in display.columns:
             display[column] = display[column].map(_format_date)
     for column in ["最近4周销售额", "前4周销售额", "历史累计销售额", "最近一次订单金额", "历史平均订单金额"]:
@@ -91,19 +97,43 @@ def _display_risk_table(df: pd.DataFrame) -> pd.DataFrame:
     for column in ["Typical Order Interval Days"]:
         if column in display.columns:
             display[column] = display[column].map(_format_days)
+    for column in ["Average Order Interval Days", "Median Order Interval Days", "Recent Median Interval Days"]:
+        if column in display.columns:
+            display[column] = display[column].map(_format_days)
+    for column in ["Interval Stability Score"]:
+        if column in display.columns:
+            display[column] = display[column].map(_format_score)
     for column in ["Interval Ratio"]:
         if column in display.columns:
             display[column] = display[column].map(_format_ratio)
     for column in ["金额变化率", "频次变化率"]:
         if column in display.columns:
             display[column] = display[column].map(_format_percent)
-    return display
+    display = display.rename(
+        columns={
+            "Typical Order Interval Days": "正常采购周期",
+            "Typical Interval Source": "周期基准来源",
+            "Average Order Interval Days": "平均下单间隔",
+            "Median Order Interval Days": "中位下单间隔",
+            "Recent Median Interval Days": "近6个月中位间隔",
+            "Interval Stability Score": "稳定性CV",
+            "Interval Stability Status": "采购节奏稳定性",
+            "Expected Next Order Date": "预计下次采购日期",
+            "Days Since Last Order": "未下单天数",
+            "Days Overdue": "已延期天数",
+            "Interval Ratio": "偏离正常节奏倍数",
+            "Interval Status": "节奏状态",
+            "Historical Order Count": "历史订单数",
+            "Recent 6 Months Order Count": "近6个月订单数",
+        }
+    )
+    return display.loc[:, ~display.columns.duplicated()]
 
 
 def _style_status_columns(df: pd.DataFrame):
     status_columns = [
         column
-        for column in ["风险等级", "Health Status", "Trend Direction", "Improvement Type", "Interval Status"]
+        for column in ["风险等级", "Health Status", "Trend Direction", "Improvement Type", "Interval Status", "节奏状态"]
         if column in df.columns
     ]
     if not status_columns:
@@ -197,7 +227,10 @@ else:
             cols[4].markdown(_format_days(row.get("Typical Order Interval Days")))
             st.caption(
                 f"最近下单：{_format_date(row.get('最近下单日期'))} | "
+                f"预计采购：{_format_date(row.get('Expected Next Order Date')) or '暂无稳定周期'} | "
+                f"已延期：{int(row.get('Days Overdue', 0) or 0)} 天 | "
                 f"偏离倍数：{_format_ratio(row.get('Interval Ratio'))} | "
+                f"采购节奏：{row.get('Interval Stability Status', '历史不足')} | "
                 f"风险类型：{row.get('风险类型', '')} | "
                 f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
             )
@@ -222,7 +255,11 @@ else:
             cols[3].markdown(f"{int(row.get('前8周订单数', 0))} 单 → {int(row.get('最近8周订单数', 0))} 单")
             cols[4].caption("当前节奏")
             cols[4].markdown(_format_ratio(row.get("Interval Ratio")))
-            st.caption(f"历史销售额：{_format_money(row.get('历史累计销售额'))}")
+            st.caption(
+                f"正常周期：{_format_days(row.get('Typical Order Interval Days'))} | "
+                f"采购节奏：{row.get('Interval Stability Status', '历史不足')} | "
+                f"历史销售额：{_format_money(row.get('历史累计销售额'))}"
+            )
 
 st.subheader("客户健康 KPI")
 active = result.active_metrics
@@ -260,6 +297,7 @@ else:
     sort_options = {
         "风险等级": ("_priority_order", True),
         "偏离正常节奏": ("Interval Ratio", False),
+        "已延期天数": ("Days Overdue", False),
         "未下单天数": ("未下单天数", False),
         "金额下降": ("金额变化率", True),
         "频次下降": ("频次变化率", True),

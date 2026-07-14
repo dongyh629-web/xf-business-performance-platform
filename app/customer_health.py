@@ -14,9 +14,12 @@ CUSTOMER_VALUE_DECLINE_THRESHOLD = getattr(app_config, "CUSTOMER_VALUE_DECLINE_T
 CUSTOMER_VALUE_DECLINE_MIN_AMOUNT = getattr(app_config, "CUSTOMER_VALUE_DECLINE_MIN_AMOUNT", 500)
 CUSTOMER_FREQUENCY_DECLINE_THRESHOLD = getattr(app_config, "CUSTOMER_FREQUENCY_DECLINE_THRESHOLD", 0.30)
 CUSTOMER_FREQUENCY_MIN_BASE_ORDERS = getattr(app_config, "CUSTOMER_FREQUENCY_MIN_BASE_ORDERS", 4)
-CUSTOMER_INTERVAL_WARNING_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_WARNING_RATIO", 1.2)
-CUSTOMER_INTERVAL_RISK_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_RISK_RATIO", 1.8)
+CUSTOMER_MIN_ORDERS_FOR_INTERVAL = getattr(app_config, "CUSTOMER_MIN_ORDERS_FOR_INTERVAL", 4)
+CUSTOMER_INTERVAL_NORMAL_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_NORMAL_RATIO", 1.2)
+CUSTOMER_INTERVAL_WARNING_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_WARNING_RATIO", 1.8)
 CUSTOMER_INTERVAL_HIGH_RISK_RATIO = getattr(app_config, "CUSTOMER_INTERVAL_HIGH_RISK_RATIO", 2.5)
+CUSTOMER_INTERVAL_STABILITY_VERY_STABLE_CV = getattr(app_config, "CUSTOMER_INTERVAL_STABILITY_VERY_STABLE_CV", 0.25)
+CUSTOMER_INTERVAL_STABILITY_STABLE_CV = getattr(app_config, "CUSTOMER_INTERVAL_STABILITY_STABLE_CV", 0.50)
 CUSTOMER_VALUE_IMPROVEMENT_THRESHOLD = getattr(app_config, "CUSTOMER_VALUE_IMPROVEMENT_THRESHOLD", 0.20)
 CUSTOMER_VALUE_IMPROVEMENT_MIN_AMOUNT = getattr(app_config, "CUSTOMER_VALUE_IMPROVEMENT_MIN_AMOUNT", 500)
 CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD = getattr(app_config, "CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD", 0.20)
@@ -153,36 +156,63 @@ def _order_gap_stats(order_dates: pd.Series, anchor: pd.Timestamp) -> dict[str, 
     if unique_dates.empty:
         return {
             "Historical Order Count": 0,
-            "Last 6 Months Order Count": 0,
+            "Recent 6 Months Order Count": 0,
             "Typical Order Interval Days": pd.NA,
+            "Typical Interval Source": "历史订单不足",
             "Average Order Interval Days": pd.NA,
             "Median Order Interval Days": pd.NA,
-            "Last 6 Months Average Interval Days": pd.NA,
+            "Recent Median Interval Days": pd.NA,
+            "Interval Stability Score": pd.NA,
+            "Interval Stability Status": "历史不足",
         }
     gaps = unique_dates.diff().dt.days.dropna()
     recent_dates = unique_dates[unique_dates.ge(anchor.normalize() - pd.DateOffset(months=6))]
     recent_gaps = recent_dates.diff().dt.days.dropna()
-    median_gap = float(gaps.median()) if len(gaps) >= 2 else pd.NA
-    recent_gap = float(recent_gaps.mean()) if len(recent_gaps) >= 2 else pd.NA
-    typical = median_gap if pd.notna(median_gap) else recent_gap
+    historical_order_count = int(len(unique_dates))
+    recent_order_count = int(len(recent_dates))
+    average_gap = float(gaps.mean()) if len(gaps) >= 1 else pd.NA
+    median_gap = float(gaps.median()) if len(gaps) >= 1 else pd.NA
+    recent_median_gap = float(recent_gaps.median()) if len(recent_gaps) >= 1 else pd.NA
+    if historical_order_count < CUSTOMER_MIN_ORDERS_FOR_INTERVAL:
+        typical = pd.NA
+        source = "历史订单不足"
+    elif recent_order_count >= CUSTOMER_MIN_ORDERS_FOR_INTERVAL and pd.notna(recent_median_gap):
+        typical = recent_median_gap
+        source = "最近6个月中位数"
+    else:
+        typical = median_gap
+        source = "历史中位数" if pd.notna(median_gap) else "历史订单不足"
+    stability_score = pd.NA
+    stability_status = "历史不足"
+    if len(gaps) >= CUSTOMER_MIN_ORDERS_FOR_INTERVAL - 1 and pd.notna(average_gap) and average_gap > 0:
+        stability_score = float(gaps.std(ddof=0) / average_gap)
+        if stability_score <= CUSTOMER_INTERVAL_STABILITY_VERY_STABLE_CV:
+            stability_status = "非常稳定"
+        elif stability_score <= CUSTOMER_INTERVAL_STABILITY_STABLE_CV:
+            stability_status = "较稳定"
+        else:
+            stability_status = "波动较大"
     return {
-        "Historical Order Count": int(len(unique_dates)),
-        "Last 6 Months Order Count": int(len(recent_dates)),
+        "Historical Order Count": historical_order_count,
+        "Recent 6 Months Order Count": recent_order_count,
         "Typical Order Interval Days": typical,
-        "Average Order Interval Days": float(gaps.mean()) if len(gaps) >= 2 else pd.NA,
+        "Typical Interval Source": source,
+        "Average Order Interval Days": average_gap,
         "Median Order Interval Days": median_gap,
-        "Last 6 Months Average Interval Days": recent_gap,
+        "Recent Median Interval Days": recent_median_gap,
+        "Interval Stability Score": stability_score,
+        "Interval Stability Status": stability_status,
     }
 
 
 def _interval_status(interval_ratio: object, historical_order_count: object) -> str:
     order_count = pd.to_numeric(historical_order_count, errors="coerce")
-    if pd.isna(order_count) or order_count < 3 or pd.isna(interval_ratio):
+    if pd.isna(order_count) or order_count < CUSTOMER_MIN_ORDERS_FOR_INTERVAL or pd.isna(interval_ratio):
         return "数据不足"
     ratio = float(interval_ratio)
+    if ratio <= CUSTOMER_INTERVAL_NORMAL_RATIO:
+        return "正常节奏"
     if ratio <= CUSTOMER_INTERVAL_WARNING_RATIO:
-        return "正常"
-    if ratio <= CUSTOMER_INTERVAL_RISK_RATIO:
         return "轻度延迟"
     if ratio <= CUSTOMER_INTERVAL_HIGH_RISK_RATIO:
         return "明显延迟"
@@ -190,14 +220,14 @@ def _interval_status(interval_ratio: object, historical_order_count: object) -> 
 
 
 def _health_status(priority: str, interval_status: str) -> str:
-    if interval_status == "数据不足":
-        return "数据不足"
     if priority == "高优先级":
         return "高风险"
     if priority == "中优先级":
         return "中风险"
     if priority == "低优先级":
         return "轻度风险"
+    if interval_status == "数据不足":
+        return "数据不足"
     return "正常"
 
 
@@ -205,9 +235,9 @@ def _trend_direction(row: pd.Series) -> str:
     risks = str(row.get("风险类型", ""))
     if any(token in risks for token in ["采购金额下降", "下单频次下降", "30天未下单", "90天未下单"]):
         return "恶化"
-    if pd.notna(row.get("Improvement Type", pd.NA)):
+    if pd.notna(row.get("Improvement Type", pd.NA)) and str(row.get("Improvement Type")) != "无":
         improvement = str(row.get("Improvement Type", ""))
-        if "恢复正常" in improvement:
+        if "恢复正常" in improvement or "节奏恢复" in improvement:
             return "恢复正常"
         return "改善"
     if risks:
@@ -218,13 +248,16 @@ def _trend_direction(row: pd.Series) -> str:
 def get_customer_status_style(value: object) -> str:
     text = "" if pd.isna(value) else str(value)
     red_values = {"高优先级", "高风险", "高风险延迟", "恶化", "明显恶化"}
-    orange_values = {"中优先级", "中风险", "明显延迟", "轻度延迟", "轻度风险"}
-    green_values = {"明显改善", "轻度改善", "恢复正常", "持续稳定", "改善", "正常"}
-    gray_values = {"数据不足", "暂无稳定频率基准", "稳定"}
+    orange_values = {"中优先级", "中风险", "明显延迟"}
+    yellow_values = {"轻度风险", "轻度延迟", "需要观察"}
+    green_values = {"金额改善", "频次改善", "节奏恢复", "恢复正常", "持续稳定", "改善", "正常", "正常节奏"}
+    gray_values = {"数据不足", "暂无稳定频率基准", "稳定", "历史不足", "无"}
     if text in red_values:
         return "background-color: #fde8e8; color: #991b1b; font-weight: 600;"
     if text in orange_values:
         return "background-color: #fff4e5; color: #9a4b00; font-weight: 600;"
+    if text in yellow_values:
+        return "background-color: #fff9db; color: #854d0e; font-weight: 600;"
     if text in green_values:
         return "background-color: #e8f5ee; color: #166534; font-weight: 600;"
     if text in gray_values:
@@ -282,6 +315,11 @@ def _customer_profile(history_df: pd.DataFrame, anchor: pd.Timestamp | None = No
     last_dates = pd.to_datetime(profile["最近下单日期"], errors="coerce").dt.normalize()
     profile["Days Since Last Order"] = (anchor.normalize() - last_dates).dt.days.clip(lower=0)
     typical = pd.to_numeric(profile["Typical Order Interval Days"], errors="coerce")
+    profile["Expected Next Order Date"] = pd.NaT
+    valid_typical = typical.notna() & typical.gt(0) & last_dates.notna()
+    profile.loc[valid_typical, "Expected Next Order Date"] = last_dates.loc[valid_typical] + pd.to_timedelta(typical.loc[valid_typical], unit="D")
+    expected_dates = pd.to_datetime(profile["Expected Next Order Date"], errors="coerce").dt.normalize()
+    profile["Days Overdue"] = (anchor.normalize() - expected_dates).dt.days.clip(lower=0)
     profile["Interval Ratio"] = profile.apply(
         lambda row: _safe_ratio(float(row["Days Since Last Order"]), float(row["Typical Order Interval Days"]))
         if pd.notna(row["Typical Order Interval Days"]) and float(row["Typical Order Interval Days"]) > 0
@@ -368,11 +406,19 @@ def dormant_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> tuple[p
         "最近一次订单金额",
         "历史平均订单金额",
         "Typical Order Interval Days",
+        "Typical Interval Source",
+        "Average Order Interval Days",
+        "Median Order Interval Days",
+        "Recent Median Interval Days",
+        "Interval Stability Score",
+        "Interval Stability Status",
+        "Expected Next Order Date",
         "Days Since Last Order",
+        "Days Overdue",
         "Interval Ratio",
         "Interval Status",
         "Historical Order Count",
-        "Last 6 Months Order Count",
+        "Recent 6 Months Order Count",
         "风险类型",
     ]
     dormant_30 = result[result["未下单天数"].gt(30) & result["未下单天数"].le(90)].copy()
@@ -473,20 +519,28 @@ def _priority_for_row(row: pd.Series) -> str:
     value_decline_rate = row.get("金额变化率")
     frequency_decline_rate = row.get("频次变化率")
     interval_ratio = row.get("Interval Ratio")
+    days_overdue = row.get("Days Overdue")
+    stability = str(row.get("Interval Stability Status", "历史不足"))
     history_sales = float(row.get("历史累计销售额", 0.0) or 0.0)
     high_contribution = bool(row.get("_high_contribution", False))
 
-    if abc == "A" and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_RISK_RATIO:
+    if abc == "A" and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_WARNING_RATIO:
         return "高优先级"
     if abc in {"A", "B"} and pd.notna(value_decline_rate) and value_decline_rate <= -0.40:
         return "高优先级"
-    if abc == "A" and {"采购金额下降", "下单频次下降"}.issubset(risks):
+    if abc == "A" and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_NORMAL_RATIO and ({"采购金额下降", "下单频次下降"} & risks):
         return "高优先级"
     if high_contribution and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_HIGH_RISK_RATIO and history_sales > 0:
         return "高优先级"
-    if pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_HIGH_RISK_RATIO:
+    if "90天未下单" in risks and high_contribution and history_sales > 0:
         return "高优先级"
-    if abc == "B" and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_RISK_RATIO:
+    if stability in {"非常稳定", "较稳定"} and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_WARNING_RATIO:
+        return "高优先级"
+    if pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_HIGH_RISK_RATIO and stability != "波动较大":
+        return "高优先级"
+    if abc == "B" and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_WARNING_RATIO:
+        return "中优先级"
+    if abc in {"A", "B"} and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_NORMAL_RATIO and ({"采购金额下降", "下单频次下降"} & risks):
         return "中优先级"
     if abc in {"A", "B"} and "下单频次下降" in risks:
         return "中优先级"
@@ -494,7 +548,9 @@ def _priority_for_row(row: pd.Series) -> str:
         return "中优先级"
     if pd.notna(frequency_decline_rate) and frequency_decline_rate <= -CUSTOMER_FREQUENCY_DECLINE_THRESHOLD:
         return "中优先级"
-    if pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_WARNING_RATIO:
+    if "30天未下单" in risks and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_NORMAL_RATIO:
+        return "中优先级"
+    if pd.notna(days_overdue) and float(days_overdue) > 0 and pd.notna(interval_ratio) and float(interval_ratio) > CUSTOMER_INTERVAL_NORMAL_RATIO:
         return "中优先级"
     return "低优先级"
 
@@ -504,7 +560,7 @@ def interval_delay_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> 
     if profile.empty:
         return pd.DataFrame()
     delayed = profile[
-        pd.to_numeric(profile["Interval Ratio"], errors="coerce").gt(CUSTOMER_INTERVAL_WARNING_RATIO)
+        pd.to_numeric(profile["Interval Ratio"], errors="coerce").gt(CUSTOMER_INTERVAL_NORMAL_RATIO)
         & ~profile["Interval Status"].eq("数据不足")
     ].copy()
     if delayed.empty:
@@ -519,10 +575,18 @@ def interval_delay_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> 
             "最近下单日期",
             "Days Since Last Order",
             "Typical Order Interval Days",
+            "Typical Interval Source",
+            "Average Order Interval Days",
+            "Median Order Interval Days",
+            "Recent Median Interval Days",
+            "Interval Stability Score",
+            "Interval Stability Status",
+            "Expected Next Order Date",
+            "Days Overdue",
             "Interval Ratio",
             "Interval Status",
             "Historical Order Count",
-            "Last 6 Months Order Count",
+            "Recent 6 Months Order Count",
             "历史累计销售额",
             "风险类型",
         ]
@@ -554,11 +618,16 @@ def improvement_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.
                 "ABC Class",
                 "历史累计销售额",
                 "Typical Order Interval Days",
+                "Typical Interval Source",
+                "Interval Stability Score",
+                "Interval Stability Status",
+                "Expected Next Order Date",
                 "Days Since Last Order",
+                "Days Overdue",
                 "Interval Ratio",
                 "Interval Status",
                 "Historical Order Count",
-                "Last 6 Months Order Count",
+                "Recent 6 Months Order Count",
             ]
         ],
         on="Customer Code",
@@ -576,31 +645,37 @@ def improvement_customers(history_df: pd.DataFrame, anchor: pd.Timestamp) -> pd.
             and pd.notna(row["订单增长率"])
             and row["订单增长率"] >= CUSTOMER_FREQUENCY_IMPROVEMENT_THRESHOLD
         )
-        recovered = pd.notna(row["Interval Ratio"]) and row["Interval Ratio"] <= CUSTOMER_INTERVAL_WARNING_RATIO and row["Historical Order Count"] >= 3
-        stable = row["Interval Status"] == "正常" and not value_improved and not frequency_improved
-        if value_improved and frequency_improved:
-            return "明显改善"
+        recovered = (
+            pd.notna(row["Interval Ratio"])
+            and row["Interval Ratio"] <= CUSTOMER_INTERVAL_NORMAL_RATIO
+            and row["Historical Order Count"] >= CUSTOMER_MIN_ORDERS_FOR_INTERVAL
+        )
+        stable = row["Interval Status"] == "正常节奏" and not value_improved and not frequency_improved
+        if recovered:
+            return "节奏恢复"
         if value_improved:
             return "金额改善"
         if frequency_improved:
             return "频次改善"
-        if recovered:
-            return "恢复正常"
         if stable:
-            return "持续稳定"
+            return "无"
         return None
 
     table["Improvement Type"] = table.apply(improvement_type, axis=1)
-    table = table[table["Improvement Type"].notna()].copy()
+    table = table[table["Improvement Type"].notna() & ~table["Improvement Type"].eq("无")].copy()
     if table.empty:
         return pd.DataFrame()
-    table["Trend Direction"] = table["Improvement Type"].map(lambda value: "恢复正常" if value == "恢复正常" else "改善")
-    table["_improvement_score"] = (
-        pd.to_numeric(table["金额增长率"], errors="coerce").fillna(0)
-        + pd.to_numeric(table["订单增长率"], errors="coerce").fillna(0)
-        + pd.to_numeric(table["历史累计销售额"], errors="coerce").fillna(0) / 100000
+    table["Trend Direction"] = table["Improvement Type"].map(lambda value: "恢复正常" if value == "节奏恢复" else "改善")
+    improvement_order = {"节奏恢复": 0, "金额改善": 1, "频次改善": 2}
+    table["_improvement_order"] = table["Improvement Type"].map(improvement_order).fillna(9)
+    return (
+        table.sort_values(
+            ["_improvement_order", "金额增长", "金额增长率", "订单增长", "历史累计销售额"],
+            ascending=[True, False, False, False, False],
+        )
+        .drop(columns=["_improvement_order"])
+        .reset_index(drop=True)
     )
-    return table.sort_values("_improvement_score", ascending=False).drop(columns=["_improvement_score"]).reset_index(drop=True)
 
 
 def merge_risk_customers(
@@ -640,11 +715,19 @@ def merge_risk_customers(
     interval_cols = [
         "Customer Code",
         "Typical Order Interval Days",
+        "Typical Interval Source",
+        "Average Order Interval Days",
+        "Median Order Interval Days",
+        "Recent Median Interval Days",
+        "Interval Stability Score",
+        "Interval Stability Status",
+        "Expected Next Order Date",
         "Days Since Last Order",
+        "Days Overdue",
         "Interval Ratio",
         "Interval Status",
         "Historical Order Count",
-        "Last 6 Months Order Count",
+        "Recent 6 Months Order Count",
     ]
     if not interval_delay.empty:
         result = result.drop(columns=[col for col in interval_cols[1:] if col in result.columns], errors="ignore")
@@ -660,6 +743,7 @@ def merge_risk_customers(
         result = result.merge(improving[["Customer Code", "Improvement Type"]], on="Customer Code", how="left")
     else:
         result["Improvement Type"] = pd.NA
+    result["Improvement Type"] = result["Improvement Type"].fillna("无")
     contribution_threshold = result["历史累计销售额"].quantile(0.20) if result["历史累计销售额"].notna().any() else 0.0
     result["_high_contribution"] = result["历史累计销售额"].ge(contribution_threshold)
     result["风险等级"] = result.apply(_priority_for_row, axis=1)
@@ -684,11 +768,19 @@ def merge_risk_customers(
             "最近下单日期",
             "未下单天数",
             "Typical Order Interval Days",
+            "Typical Interval Source",
+            "Average Order Interval Days",
+            "Median Order Interval Days",
+            "Recent Median Interval Days",
+            "Interval Stability Score",
+            "Interval Stability Status",
+            "Expected Next Order Date",
             "Days Since Last Order",
+            "Days Overdue",
             "Interval Ratio",
             "Interval Status",
             "Historical Order Count",
-            "Last 6 Months Order Count",
+            "Recent 6 Months Order Count",
             "最近4周销售额",
             "前4周销售额",
             "金额变化率",
@@ -710,13 +802,14 @@ def follow_up_customers(risk_customers: pd.DataFrame, limit: int = 10) -> pd.Dat
     result["_priority_order"] = result["风险等级"].map(PRIORITY_ORDER).fillna(9)
     result["_abc_order"] = result["ABC Class"].map(ABC_ORDER).fillna(9)
     result["_interval_ratio"] = pd.to_numeric(result["Interval Ratio"], errors="coerce").fillna(0)
+    result["_days_overdue"] = pd.to_numeric(result["Days Overdue"], errors="coerce").fillna(0)
     result["_value_decline"] = pd.to_numeric(result["金额变化率"], errors="coerce").fillna(0)
     result["_frequency_decline"] = pd.to_numeric(result["频次变化率"], errors="coerce").fillna(0)
     result = result.sort_values(
-        ["_priority_order", "_interval_ratio", "_abc_order", "历史累计销售额", "_value_decline", "_frequency_decline"],
-        ascending=[True, False, True, False, True, True],
+        ["_priority_order", "_interval_ratio", "_days_overdue", "_abc_order", "历史累计销售额", "_value_decline", "_frequency_decline"],
+        ascending=[True, False, False, True, False, True, True],
     )
-    return result.head(limit).drop(columns=["_priority_order", "_abc_order", "_interval_ratio", "_value_decline", "_frequency_decline"], errors="ignore")
+    return result.head(limit).drop(columns=["_priority_order", "_abc_order", "_interval_ratio", "_days_overdue", "_value_decline", "_frequency_decline"], errors="ignore")
 
 
 def build_customer_health(current_df: pd.DataFrame, history_df: pd.DataFrame) -> CustomerHealthResult:
