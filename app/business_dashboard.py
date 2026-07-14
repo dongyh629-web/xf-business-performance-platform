@@ -427,78 +427,30 @@ def _render_weekly_summary(df: pd.DataFrame, metrics: BusinessDashboardMetrics) 
     week = metrics.week
     section_header("本周经营摘要", "Weekly Business Summary")
     range_week = cached_range_week_table(df, week)
-    top_growth = range_week[range_week["Change"].gt(0)].sort_values("Change", ascending=False).head(3)
-    top_decline = range_week[range_week["Change"].lt(0)].sort_values("Change").head(3)
-    top_contribution = range_week.sort_values("Current Week", ascending=False).head(1)
+    top_growth = range_week[range_week["Change"].gt(0)].sort_values("Change", ascending=False).head(1)
+    top_decline = range_week[range_week["Change"].lt(0)].sort_values("Change").head(1)
     focus = range_week[
         (range_week["Change"].lt(0)) & (range_week["Current Week"].gt(0) | range_week["Previous Week Same Progress"].gt(0))
-    ].sort_values("Change").head(3)
+    ].sort_values("Change").head(2)
 
-    st.markdown(
-        f"**Week {week.iso_week}，截至 {week.anchor:%-m 月 %-d 日}：** "
-        f"本周销售 {money(metrics.week_sales)}，较上周同期"
-        f"{'无可比基数' if metrics.week_mom is None else _format_percent(metrics.week_mom)}；"
-        f"本周订单 {metrics.week_orders:,} 单，活跃客户 {metrics.week_active_customers:,} 个。"
+    growth_text = "暂无增长贡献"
+    if not top_growth.empty:
+        row = top_growth.iloc[0]
+        growth_text = f"{row[RANGE_COLUMN]} {money(row['Change'])}"
+    decline_text = "暂无下降拖累"
+    if not top_decline.empty:
+        row = top_decline.iloc[0]
+        decline_text = f"{row[RANGE_COLUMN]} {money(row['Change'])}"
+    focus_text = "暂无明显下降系列" if focus.empty else "、".join(focus[RANGE_COLUMN].astype(str).tolist())
+    change_text = "无可比基数" if metrics.week_mom is None else _format_percent(metrics.week_mom)
+    st.info(
+        f"**Week {week.iso_week}，截至 {week.anchor:%-m 月 %-d 日}**\n\n"
+        f"本周销售 {money(metrics.week_sales)}，较上周同期 {change_text}。"
+        f"本周订单 {metrics.week_orders:,} 单，活跃客户 {metrics.week_active_customers:,} 个。\n\n"
+        f"增长贡献最高：{growth_text}。\n\n"
+        f"下降拖累最大：{decline_text}。\n\n"
+        f"需要关注：{focus_text}。"
     )
-    cols = st.columns(4)
-    with cols[0]:
-        st.caption("增长贡献")
-        if top_growth.empty:
-            st.write("暂无增长贡献")
-        for _, row in top_growth.iterrows():
-            st.write(f"{row[RANGE_COLUMN]}  {money(row['Change'])}")
-    with cols[1]:
-        st.caption("下降拖累")
-        if top_decline.empty:
-            st.write("暂无下降拖累")
-        for _, row in top_decline.iterrows():
-            st.write(f"{row[RANGE_COLUMN]}  {money(row['Change'])}")
-    with cols[2]:
-        st.caption("销售贡献最高")
-        for _, row in top_contribution.iterrows():
-            st.write(f"{row[RANGE_COLUMN]}  {money(row['Current Week'])}")
-    with cols[3]:
-        st.caption("当前需要关注")
-        if focus.empty:
-            st.write("暂无明显下降系列")
-        else:
-            st.write("、".join(focus[RANGE_COLUMN].astype(str).tolist()))
-
-
-def _render_range_snapshot(df: pd.DataFrame) -> None:
-    import streamlit as st
-
-    overview, _ = _monthly_range_overview(df)
-    if overview.empty:
-        return
-    section_header("产品系列速览", "Top / Risk Snapshot")
-    unconfigured = int(overview["Monthly Target"].isna().sum()) if "Monthly Target" in overview.columns else 0
-
-    def render_list(title: str, data: pd.DataFrame, value_col: str, rate_col: str | None = None) -> None:
-        st.caption(title)
-        if data.empty:
-            st.write("暂无数据")
-            return
-        for _, row in data.iterrows():
-            rate_text = "" if rate_col is None else f" | {_format_percent(row[rate_col]) if pd.notna(row[rate_col]) else '无基数'}"
-            st.write(f"**{row[RANGE_COLUMN]}**  {money(row[value_col])}{rate_text}")
-
-    top_sales = overview.sort_values("Current Month Sales", ascending=False).head(5)
-    top_growth = overview[pd.to_numeric(overview["YoY Rate"], errors="coerce").notna()].sort_values("YoY Rate", ascending=False).head(3)
-    top_decline = overview[pd.to_numeric(overview["YoY Rate"], errors="coerce").notna()].sort_values("YoY Rate", ascending=True).head(3)
-    lowest_completion = overview[pd.to_numeric(overview["Target Completion"], errors="coerce").notna()].sort_values("Target Completion").head(3)
-
-    cols = st.columns(5)
-    with cols[0]:
-        render_list("本月销售额 Top 5", top_sales, "Current Month Sales")
-    with cols[1]:
-        render_list("同比增长 Top 3", top_growth, "Current Month Sales", "YoY Rate")
-    with cols[2]:
-        render_list("同比下降 Top 3", top_decline, "Current Month Sales", "YoY Rate")
-    with cols[3]:
-        render_list("目标完成率最低 Top 3", lowest_completion, "Current Month Sales", "Target Completion")
-    with cols[4]:
-        st.metric("未配置目标系列", f"{unconfigured:,}")
 
 
 def _scope_text(df: pd.DataFrame) -> str:
@@ -570,16 +522,9 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
         if metrics.monthly_target <= 0:
             st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
 
-    section_header("销售时间尺度总览")
+    section_header("销售与目标进度")
     kpi_grid(
         [
-            {
-                "label": "今日销售额",
-                "value": money(metrics.today_sales),
-                "delta": _format_delta(_safe_ratio(metrics.today_sales - metrics.previous_business_day_sales, metrics.previous_business_day_sales)),
-                "caption": f"分析日期：{metrics.anchor_date}",
-                "help": "对比上一可比工作日。",
-            },
             {
                 "label": "本周销售额",
                 "value": money(metrics.week_sales),
@@ -595,42 +540,22 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
                 "help": "对比去年同月同日进度。",
             },
             {
-                "label": "年度累计销售额",
-                "value": money(metrics.annual_sales),
-                "delta": _format_delta(metrics.annual_ytd_yoy),
-                "caption": f"{metrics.year_start.date()} 至 {metrics.anchor_date}",
-                "help": "自然年累计，对比去年同期累计。",
+                "label": "本月目标完成率",
+                "value": _format_percent(metrics.monthly_completion),
+                "delta": f"目标 {money(metrics.monthly_target)}",
+                "caption": f"剩余 {money(metrics.monthly_remaining_target)}",
+            },
+            {
+                "label": "Pace 差值",
+                "value": _format_signed_points(metrics.pace_gap),
+                "caption": "目标完成率 - 工作日进度",
+                "help": "单位为百分点。",
             },
         ],
         columns=4,
     )
 
-    section_header("订单和客户")
-    kpi_grid(
-        [
-            {"label": "今日订单数", "value": f"{metrics.today_orders:,}", "caption": "按 Order No. 去重"},
-            {"label": "本周订单数", "value": f"{metrics.week_orders:,}", "caption": "周一至分析截止日"},
-            {"label": "本月订单数", "value": f"{metrics.month_orders:,}", "caption": "本月 1 日至分析截止日"},
-            {"label": "当月活跃客户数", "value": f"{metrics.monthly_active_customers:,}", "caption": "沿用客户健康口径"},
-        ],
-        columns=4,
-    )
-
-    section_header("目标和增长")
-    kpi_grid(
-        [
-            {"label": "本月目标完成率", "value": _format_percent(metrics.monthly_completion), "caption": _metric_status(metrics.monthly_completion)},
-            {"label": "Pace 差值", "value": _format_signed_points(metrics.pace_gap), "caption": "目标完成率 - 工作日进度"},
-            {"label": "本月同比", "value": _format_percent(metrics.monthly_yoy), "caption": _metric_status(metrics.monthly_yoy)},
-            {"label": "本月环比", "value": _format_percent(metrics.monthly_mom), "caption": _metric_status(metrics.monthly_mom)},
-        ],
-        columns=4,
-    )
-
     st.info(generate_business_summary(metrics))
-
-    _render_weekly_summary(df, metrics)
-    _render_range_snapshot(df)
 
     st.divider()
     st.markdown("#### 年度经营")
@@ -657,3 +582,12 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
     with progress_cols[1]:
         st.caption("工作日进度")
         st.progress(_progress(metrics.workday_progress), text=_format_percent(metrics.workday_progress))
+
+    st.caption(
+        f"本周订单 {metrics.week_orders:,} | "
+        f"本月订单 {metrics.month_orders:,} | "
+        f"活跃客户 {metrics.monthly_active_customers:,}"
+    )
+
+    _render_weekly_summary(df, metrics)
+    st.page_link("pages/6_产品系列经营追踪.py", label="查看产品系列经营追踪")

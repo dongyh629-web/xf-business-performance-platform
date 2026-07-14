@@ -15,7 +15,6 @@ from app.product_range_metrics import (
 )
 from app.ui import (
     inject_global_styles,
-    kpi_grid,
     money,
     percent,
     section_header,
@@ -35,7 +34,13 @@ def _fmt_money(value) -> str:
 
 def _fmt_percent(value) -> str:
     if value is None or pd.isna(value):
-        return "无基准"
+        return "无基数"
+    return f"{float(value):+.1%}"
+
+
+def _fmt_percent_plain(value) -> str:
+    if value is None or pd.isna(value):
+        return "无基数"
     return percent(float(value))
 
 
@@ -52,13 +57,19 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
         "Annual Target",
         "距离目标差额",
     ]
-    percent_cols = ["同比增长率", "环比增长率", "年累计同比", "目标完成率"]
+    signed_percent_cols = ["同比增长率"]
+    plain_percent_cols = ["环比增长率", "年累计同比"]
     for col in money_cols:
         if col in display.columns:
             display[col] = display[col].map(_fmt_money)
-    for col in percent_cols:
+    for col in signed_percent_cols:
         if col in display.columns:
             display[col] = display[col].map(_fmt_percent)
+    for col in plain_percent_cols:
+        if col in display.columns:
+            display[col] = display[col].map(_fmt_percent_plain)
+    if "目标完成率" in display.columns:
+        display["目标完成率"] = display["目标完成率"].map(lambda value: "未配置" if value is None or pd.isna(value) else percent(float(value)))
     return display
 
 
@@ -81,21 +92,47 @@ def _compact_name(value: object, limit: int = 26) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _summary_table(data: pd.DataFrame) -> pd.DataFrame:
-    columns = ["产品系列", "本月销售额", "同比增长率", "目标完成率", "距离目标差额", "当前状态"]
-    if data.empty:
-        return pd.DataFrame(columns=columns)
-    return _display_table(data[columns].copy())
+def _completion_style(value: object) -> str:
+    if pd.isna(value) or value == "未配置":
+        return "background-color: #f3f4f6; color: #4b5563;"
+    text = str(value).replace("%", "").replace("+", "")
+    try:
+        number = float(text) / 100
+    except ValueError:
+        return "background-color: #f3f4f6; color: #4b5563;"
+    if number >= 1:
+        return "background-color: #e8f5ee; color: #166534; font-weight: 600;"
+    if number >= 0.8:
+        return "background-color: #f0fdf4; color: #166534;"
+    if number >= 0.6:
+        return "background-color: #fff9db; color: #854d0e;"
+    return "background-color: #fde8e8; color: #991b1b;"
 
 
-def _render_summary_block(title: str, data: pd.DataFrame) -> None:
-    st.caption(title)
-    if data.empty:
-        st.write("暂无数据")
-        return
-    display = _summary_table(data.head(5)).copy()
-    display["产品系列"] = display["产品系列"].map(_compact_name)
-    st.dataframe(display.style.map(status_style, subset=["当前状态"]), width="stretch", hide_index=True, height=220)
+def _yoy_style(value: object) -> str:
+    if pd.isna(value) or value == "无基数":
+        return "background-color: #f3f4f6; color: #4b5563;"
+    text = str(value).replace("%", "").replace("+", "")
+    try:
+        number = float(text) / 100
+    except ValueError:
+        return "background-color: #f3f4f6; color: #4b5563;"
+    if number >= 0.10:
+        return "background-color: #e8f5ee; color: #166534; font-weight: 600;"
+    if number >= 0:
+        return "background-color: #f0fdf4; color: #166534;"
+    if number >= -0.10:
+        return "background-color: #fff9db; color: #854d0e;"
+    return "background-color: #fde8e8; color: #991b1b;"
+
+
+def _style_overview(display: pd.DataFrame):
+    styler = display.style.map(status_style, subset=["当前状态"])
+    if "目标完成率" in display.columns:
+        styler = styler.map(_completion_style, subset=["目标完成率"])
+    if "同比增长率" in display.columns:
+        styler = styler.map(_yoy_style, subset=["同比增长率"])
+    return styler
 
 
 def _range_label_options(df: pd.DataFrame) -> list[str]:
@@ -181,21 +218,6 @@ overview, ctx = _cached_range_overview(filtered, amount_targets, selected_year, 
 range_options = _range_label_options(filtered)
 selected_range = filter_cols[2].selectbox("产品系列", range_options)
 
-section_header("核心 KPI", "本月与去年同期、上月同期和系列目标的对比。")
-selected_overview = overview if selected_range == "全部" else overview[overview[RANGE_COLUMN].eq(selected_range)]
-configured_targets = selected_overview["Monthly Target"].notna() if "Monthly Target" in selected_overview.columns else pd.Series(dtype=bool)
-kpi_grid(
-    [
-        {"label": "当前筛选范围销售额", "value": _fmt_money(selected_overview["Current Month Sales"].sum() if not selected_overview.empty else 0), "caption": "本月 1 日至分析截止日"},
-        {"label": "增长系列数量", "value": f"{int(selected_overview['YoY Rate'].gt(0).sum()):,}", "caption": "同比为正"},
-        {"label": "下降系列数量", "value": f"{int(selected_overview['YoY Rate'].lt(0).sum()):,}", "caption": "同比为负"},
-        {"label": "达标系列数量", "value": f"{int(selected_overview['Target Completion'].ge(1).sum()):,}", "caption": "完成率 >= 100%"},
-        {"label": "需要关注系列数量", "value": f"{int(selected_overview['Status'].isin(['明显落后', '需要关注']).sum()):,}", "caption": "按状态规则"},
-        {"label": "未配置目标系列数量", "value": f"{int((~configured_targets).sum()) if len(configured_targets) else 0:,}", "caption": "未拆分公司目标"},
-    ],
-    columns=3,
-)
-
 table = overview.rename(
     columns={
         RANGE_COLUMN: "产品系列",
@@ -221,22 +243,17 @@ else:
     if selected_range != "全部":
         table = table[table["产品系列"].eq(selected_range)].copy()
 
-    section_header("Top / Risk 摘要", "先看规模、增长、下降和目标进度落后系列。")
-    top_sales = table.sort_values("本月销售额", ascending=False).head(5)
-    top_growth = table[pd.to_numeric(table["同比增长率"], errors="coerce").notna()].sort_values("同比增长率", ascending=False).head(5)
-    top_decline = table[pd.to_numeric(table["同比增长率"], errors="coerce").notna()].sort_values("同比增长率").head(5)
-    target_lag = table[pd.to_numeric(table["目标完成率"], errors="coerce").notna()].sort_values(["目标完成率", "距离目标差额"], ascending=[True, True]).head(5)
-    summary_cols = st.columns(4)
-    with summary_cols[0]:
-        _render_summary_block("销售额 Top 5", top_sales)
-    with summary_cols[1]:
-        _render_summary_block("同比增长 Top 5", top_growth)
-    with summary_cols[2]:
-        _render_summary_block("同比下降 Top 5", top_decline)
-    with summary_cols[3]:
-        _render_summary_block("目标进度落后 Top 5", target_lag)
+    configured_targets = table["本月目标"].notna() if "本月目标" in table.columns else pd.Series(dtype=bool)
+    st.caption(
+        f"本月销售 {_fmt_money(table['本月销售额'].sum())} | "
+        f"增长系列 {int(table['同比增长率'].gt(0).sum()):,} | "
+        f"下降系列 {int(table['同比增长率'].lt(0).sum()):,} | "
+        f"达标系列 {int(table['目标完成率'].ge(1).sum()):,} | "
+        f"需关注 {int(table['当前状态'].isin(['明显落后', '需要关注']).sum()):,} | "
+        f"未配置目标 {int((~configured_targets).sum()) if len(configured_targets) else 0:,}"
+    )
 
-    section_header("精简系列经营总览表", "默认只显示最重要的 9 个字段，状态放在第二列。")
+    section_header("精简系列经营总览表")
     status_options = sorted(table["当前状态"].dropna().unique().tolist())
     control_cols = st.columns([2, 1])
     selected_status = control_cols[0].multiselect("状态筛选", status_options, default=status_options)
@@ -244,20 +261,27 @@ else:
     visible = table[table["当前状态"].isin(selected_status)].copy()
     visible = _sort_overview(visible, sort_label)
     compact_columns = [
-        "产品系列",
         "当前状态",
+        "产品系列",
         "本月销售额",
         "本月目标",
         "目标完成率",
-        "距离目标差额",
         "同比增长率",
         "环比增长率",
+        "距离目标差额",
         "年累计同比",
     ]
     st.dataframe(
-        _display_table(visible[compact_columns]).style.map(status_style, subset=["当前状态"]),
+        _style_overview(_display_table(visible[compact_columns])),
         width="stretch",
         hide_index=True,
+        column_config={
+            "当前状态": st.column_config.TextColumn("当前状态", width="small"),
+            "产品系列": st.column_config.TextColumn("产品系列", width="medium"),
+            "本月销售额": st.column_config.TextColumn("本月销售额", width="small"),
+            "目标完成率": st.column_config.TextColumn("目标完成率", width="small"),
+            "同比增长率": st.column_config.TextColumn("同比增长率", width="small"),
+        },
     )
 
 section_header("本月周进度", "区分时间进度和目标完成率，用于每周查看系列进展。")
@@ -361,7 +385,7 @@ if "table" in locals() and not table.empty:
             "距离目标差额",
         ]
         st.dataframe(
-            _display_table(table[detail_columns]).style.map(status_style, subset=["当前状态"]),
+            _style_overview(_display_table(table[detail_columns])),
             width="stretch",
             hide_index=True,
         )
