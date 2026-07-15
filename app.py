@@ -1,6 +1,5 @@
 from io import BytesIO
 from html import escape
-from typing import Optional
 
 import streamlit as st
 
@@ -173,8 +172,6 @@ pages = {
 current_page = st.navigation(pages, position="hidden")
 
 
-NAV_OPEN_PARAM = "xf_nav_open"
-
 NAV_GROUPS = [
     {
         "key": "sales",
@@ -213,123 +210,66 @@ NAV_GROUPS = [
 ]
 
 
-def _first_query_param_value(name: str) -> Optional[str]:
-    value = st.query_params.get(name)
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
-
-
-def _open_group_keys() -> list[str]:
-    return [
-        str(group["key"])
-        for group in NAV_GROUPS
-        if st.session_state.get(f"sidebar_group_{group['key']}_expanded", True)
-    ]
-
-
-def _href_with_open_state(href: str) -> str:
-    separator = "&" if "?" in href else "?"
-    return f"{href}{separator}{NAV_OPEN_PARAM}={escape(','.join(_open_group_keys()), quote=True)}"
-
-
-def _render_nav_link(title: str, english: str, href: str, active: bool = False, home: bool = False) -> None:
+def _nav_link_html(title: str, english: str, href: str, active: bool = False, home: bool = False) -> str:
     classes = "xf-nav-link"
     if active:
         classes += " active"
     if home:
         classes += " home"
-    st.markdown(
-        f"""
-        <a class="{classes}" href="{_href_with_open_state(escape(href, quote=True))}" target="_self">
+    return f"""
+        <a class="{classes}" href="{escape(href, quote=True)}" target="_self">
             <span class="xf-nav-link-title">{escape(title)}</span>
             <span class="xf-nav-link-subtitle">{escape(english)}</span>
         </a>
-        """,
-        unsafe_allow_html=True,
+    """
+
+
+def _nav_group_html(group: dict[str, object], current_title: str) -> str:
+    is_current_group = any(item["title"] == current_title for item in group["items"])
+    open_attr = " open" if is_current_group or current_title == "首页" else ""
+    children = "\n".join(
+        _nav_link_html(
+            str(item["title"]),
+            str(item["english"]),
+            str(item["href"]),
+            active=current_title == item["title"],
+        )
+        for item in group["items"]
     )
-
-
-def _render_nav_group_toggle(group: dict[str, object], expanded: bool) -> None:
-    state_class = "expanded" if expanded else "collapsed"
-    chevron = "⌄" if expanded else "›"
-    group_key = str(group["key"])
-    next_open_keys = []
-    for candidate in NAV_GROUPS:
-        candidate_key = str(candidate["key"])
-        candidate_open = bool(st.session_state.get(f"sidebar_group_{candidate_key}_expanded", True))
-        if candidate_key == group_key:
-            candidate_open = not expanded
-        if candidate_open:
-            next_open_keys.append(candidate_key)
-    toggle_href = f"?{NAV_OPEN_PARAM}={escape(','.join(next_open_keys), quote=True)}"
-    st.markdown(
-        f"""
-        <a class="xf-nav-toggle {state_class}" href="{toggle_href}" target="_self">
+    return f"""
+        <details class="xf-nav-group-details"{open_attr}>
+            <summary class="xf-nav-toggle">
             <span class="xf-nav-toggle-text">
                 <span class="xf-nav-toggle-label">{escape(str(group["label"]))}</span>
                 <span class="xf-nav-toggle-subtitle">{escape(str(group["english"]))}</span>
             </span>
-            <span class="xf-nav-chevron" aria-hidden="true">{chevron}</span>
-        </a>
-        """,
-        unsafe_allow_html=True,
-    )
+                <span class="xf-nav-chevron" aria-hidden="true"></span>
+            </summary>
+            <div class="xf-nav-children">
+                {children}
+            </div>
+        </details>
+        <div class="xf-nav-divider"></div>
+    """
 
 
 def render_sidebar_navigation() -> None:
     current_title = getattr(current_page, "title", "首页")
-    current_group_key = None
-    for group in NAV_GROUPS:
-        group_key = f"sidebar_group_{group['key']}_expanded"
-        st.session_state.setdefault(group_key, True)
-        if any(item["title"] == current_title for item in group["items"]):
-            current_group_key = group_key
-
-    requested_open = _first_query_param_value(NAV_OPEN_PARAM)
-    if requested_open is not None:
-        open_keys = {key for key in requested_open.split(",") if key}
-        for group in NAV_GROUPS:
-            group_key = f"sidebar_group_{group['key']}_expanded"
-            st.session_state[group_key] = str(group["key"]) in open_keys
-
-    if current_group_key:
-        st.session_state[current_group_key] = True
 
     with st.sidebar:
+        groups_html = "\n".join(_nav_group_html(group, current_title) for group in NAV_GROUPS)
         st.markdown(
-            """
+            f"""
             <div class="xf-sidebar-brand">
                 <div class="xf-sidebar-brand-title">鲜锋经营驾驶舱</div>
                 <div class="xf-sidebar-brand-subtitle">XF Business Dashboard</div>
             </div>
+            {_nav_link_html("🏠 首页", "Home", "./", active=current_title == "首页", home=True)}
+            <div class="xf-nav-divider"></div>
+            {groups_html}
             """,
             unsafe_allow_html=True,
         )
-        _render_nav_link("🏠 首页", "Home", "./", active=current_title == "首页", home=True)
-        st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
-
-        pending_current_group_key = current_group_key
-        for group in NAV_GROUPS:
-            group_key = f"sidebar_group_{group['key']}_expanded"
-            expanded = bool(st.session_state.get(group_key, True))
-
-            if pending_current_group_key == group_key:
-                st.session_state[group_key] = True
-
-            _render_nav_group_toggle(group, bool(st.session_state.get(group_key, True)))
-
-            if st.session_state.get(group_key, True):
-                st.markdown('<div class="xf-nav-children">', unsafe_allow_html=True)
-                for item in group["items"]:
-                    _render_nav_link(
-                        item["title"],
-                        item["english"],
-                        item["href"],
-                        active=current_title == item["title"],
-                    )
-                st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
 
 
 render_sidebar_navigation()

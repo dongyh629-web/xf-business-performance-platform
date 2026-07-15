@@ -92,6 +92,18 @@ def inject_global_styles() -> None:
         section[data-testid="stSidebar"] summary::-webkit-details-marker {
             display: none;
         }
+        .xf-nav-group-details {
+            margin: 0;
+        }
+        .xf-nav-group-details > summary {
+            list-style: none;
+        }
+        .xf-nav-group-details > summary::marker {
+            content: "";
+        }
+        .xf-nav-group-details > summary::-webkit-details-marker {
+            display: none;
+        }
         .xf-nav-toggle {
             display: flex;
             align-items: center;
@@ -105,6 +117,8 @@ def inject_global_styles() -> None:
             margin: 1px 0;
             line-height: 1.2;
             background: transparent;
+            cursor: pointer;
+            user-select: none;
         }
         .xf-nav-toggle:hover {
             background: #f3f6fb;
@@ -137,11 +151,15 @@ def inject_global_styles() -> None:
             margin-left: 10px;
             transition: color 160ms ease, transform 160ms ease;
         }
+        .xf-nav-chevron::before {
+            content: "›";
+            display: inline-block;
+        }
+        .xf-nav-group-details[open] > .xf-nav-toggle .xf-nav-chevron::before {
+            content: "⌄";
+        }
         .xf-nav-toggle:hover .xf-nav-chevron {
             color: #64748b;
-        }
-        .xf-nav-toggle.collapsed .xf-nav-chevron {
-            font-size: 16px;
         }
         section[data-testid="stSidebar"] button[kind="tertiary"] {
             color: #1f2937 !important;
