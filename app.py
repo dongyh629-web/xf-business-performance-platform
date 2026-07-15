@@ -1,4 +1,6 @@
 from io import BytesIO
+from html import escape
+from typing import Optional
 
 import streamlit as st
 
@@ -171,21 +173,163 @@ pages = {
 current_page = st.navigation(pages, position="hidden")
 
 
+NAV_OPEN_PARAM = "xf_nav_open"
+
+NAV_GROUPS = [
+    {
+        "key": "sales",
+        "label": "📈 销售",
+        "english": "Sales",
+        "items": [
+            {"title": "销售经营", "english": "Sales Performance", "href": "经营追踪"},
+            {"title": "产品系列", "english": "Product Range", "href": "产品系列经营追踪"},
+        ],
+    },
+    {
+        "key": "customers",
+        "label": "👥 客户",
+        "english": "Customers",
+        "items": [
+            {"title": "客户分析", "english": "Customer Analysis", "href": "客户分析"},
+            {"title": "客户健康", "english": "Customer Health", "href": "客户健康"},
+        ],
+    },
+    {
+        "key": "products",
+        "label": "📦 产品",
+        "english": "Products",
+        "items": [
+            {"title": "产品分析", "english": "Product Analysis", "href": "产品分析"},
+        ],
+    },
+    {
+        "key": "system",
+        "label": "⚙️ 系统",
+        "english": "System",
+        "items": [
+            {"title": "数据质量", "english": "Data Quality", "href": "数据质量中心"},
+        ],
+    },
+]
+
+
+def _first_query_param_value(name: str) -> Optional[str]:
+    value = st.query_params.get(name)
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def _open_group_keys() -> list[str]:
+    return [
+        str(group["key"])
+        for group in NAV_GROUPS
+        if st.session_state.get(f"sidebar_group_{group['key']}_expanded", True)
+    ]
+
+
+def _href_with_open_state(href: str) -> str:
+    separator = "&" if "?" in href else "?"
+    return f"{href}{separator}{NAV_OPEN_PARAM}={escape(','.join(_open_group_keys()), quote=True)}"
+
+
+def _render_nav_link(title: str, english: str, href: str, active: bool = False, home: bool = False) -> None:
+    classes = "xf-nav-link"
+    if active:
+        classes += " active"
+    if home:
+        classes += " home"
+    st.markdown(
+        f"""
+        <a class="{classes}" href="{_href_with_open_state(escape(href, quote=True))}" target="_self">
+            <span class="xf-nav-link-title">{escape(title)}</span>
+            <span class="xf-nav-link-subtitle">{escape(english)}</span>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_nav_group_toggle(group: dict[str, object], expanded: bool) -> None:
+    state_class = "expanded" if expanded else "collapsed"
+    chevron = "⌄" if expanded else "›"
+    group_key = str(group["key"])
+    next_open_keys = []
+    for candidate in NAV_GROUPS:
+        candidate_key = str(candidate["key"])
+        candidate_open = bool(st.session_state.get(f"sidebar_group_{candidate_key}_expanded", True))
+        if candidate_key == group_key:
+            candidate_open = not expanded
+        if candidate_open:
+            next_open_keys.append(candidate_key)
+    toggle_href = f"?{NAV_OPEN_PARAM}={escape(','.join(next_open_keys), quote=True)}"
+    st.markdown(
+        f"""
+        <a class="xf-nav-toggle {state_class}" href="{toggle_href}" target="_self">
+            <span class="xf-nav-toggle-text">
+                <span class="xf-nav-toggle-label">{escape(str(group["label"]))}</span>
+                <span class="xf-nav-toggle-subtitle">{escape(str(group["english"]))}</span>
+            </span>
+            <span class="xf-nav-chevron" aria-hidden="true">{chevron}</span>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_sidebar_navigation() -> None:
+    current_title = getattr(current_page, "title", "首页")
+    current_group_key = None
+    for group in NAV_GROUPS:
+        group_key = f"sidebar_group_{group['key']}_expanded"
+        st.session_state.setdefault(group_key, True)
+        if any(item["title"] == current_title for item in group["items"]):
+            current_group_key = group_key
+
+    requested_open = _first_query_param_value(NAV_OPEN_PARAM)
+    if requested_open is not None:
+        open_keys = {key for key in requested_open.split(",") if key}
+        for group in NAV_GROUPS:
+            group_key = f"sidebar_group_{group['key']}_expanded"
+            st.session_state[group_key] = str(group["key"]) in open_keys
+
+    if current_group_key:
+        st.session_state[current_group_key] = True
+
     with st.sidebar:
-        st.markdown("**鲜锋经营驾驶舱**")
-        st.caption("XF Business Dashboard")
-        st.page_link(home_page, label="首页", icon="🏠", use_container_width=True)
-        st.markdown("<div style='margin-top: 0.65rem; color: #6b7280; font-size: 0.78rem; font-weight: 600;'>📈 销售</div>", unsafe_allow_html=True)
-        st.page_link(sales_tracking_page, label="销售经营", use_container_width=True)
-        st.page_link(product_range_page, label="产品系列", use_container_width=True)
-        st.markdown("<div style='margin-top: 0.65rem; color: #6b7280; font-size: 0.78rem; font-weight: 600;'>👥 客户</div>", unsafe_allow_html=True)
-        st.page_link(customer_analysis_page, label="客户分析", use_container_width=True)
-        st.page_link(customer_health_page, label="客户健康", use_container_width=True)
-        st.markdown("<div style='margin-top: 0.65rem; color: #6b7280; font-size: 0.78rem; font-weight: 600;'>📦 产品</div>", unsafe_allow_html=True)
-        st.page_link(product_analysis_page, label="产品分析", use_container_width=True)
-        st.markdown("<div style='margin-top: 0.65rem; color: #6b7280; font-size: 0.78rem; font-weight: 600;'>⚙️ 系统</div>", unsafe_allow_html=True)
-        st.page_link(data_quality_page, label="数据质量", use_container_width=True)
+        st.markdown(
+            """
+            <div class="xf-sidebar-brand">
+                <div class="xf-sidebar-brand-title">鲜锋经营驾驶舱</div>
+                <div class="xf-sidebar-brand-subtitle">XF Business Dashboard</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        _render_nav_link("🏠 首页", "Home", "./", active=current_title == "首页", home=True)
+        st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
+
+        pending_current_group_key = current_group_key
+        for group in NAV_GROUPS:
+            group_key = f"sidebar_group_{group['key']}_expanded"
+            expanded = bool(st.session_state.get(group_key, True))
+
+            if pending_current_group_key == group_key:
+                st.session_state[group_key] = True
+
+            _render_nav_group_toggle(group, bool(st.session_state.get(group_key, True)))
+
+            if st.session_state.get(group_key, True):
+                st.markdown('<div class="xf-nav-children">', unsafe_allow_html=True)
+                for item in group["items"]:
+                    _render_nav_link(
+                        item["title"],
+                        item["english"],
+                        item["href"],
+                        active=current_title == item["title"],
+                    )
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
 
 
 render_sidebar_navigation()

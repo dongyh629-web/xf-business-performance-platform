@@ -25,6 +25,204 @@ def inject_global_styles() -> None:
         """
         <style>
         .block-container {max-width: 1240px; padding-top: 1.4rem; padding-bottom: 3rem;}
+        section[data-testid="stSidebar"][aria-expanded="true"] {
+            width: 255px !important;
+            min-width: 255px !important;
+        }
+        section[data-testid="stSidebar"][aria-expanded="true"] > div {
+            width: 255px !important;
+            min-width: 255px !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            padding-top: 1rem;
+        }
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"],
+        button[kind="header"] {
+            display: inline-flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+        section[data-testid="stSidebar"] button[kind="headerNoPadding"] {
+            display: inline-flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            color: #4b5563 !important;
+            background: #ffffff !important;
+            border: 1px solid #d1d5db !important;
+            border-radius: 6px !important;
+            z-index: 20;
+        }
+        section[data-testid="stSidebar"] button[kind="headerNoPadding"] [data-testid="stIconMaterial"] {
+            color: #4b5563 !important;
+            font-size: 20px !important;
+        }
+        .xf-sidebar-brand {
+            margin: 0.15rem 0 0.7rem 0;
+        }
+        .xf-sidebar-brand-title {
+            color: #111827;
+            font-size: 23px;
+            font-weight: 700;
+            line-height: 1.15;
+            white-space: nowrap;
+        }
+        .xf-sidebar-brand-subtitle {
+            color: #8a94a6;
+            font-size: 12.5px;
+            line-height: 1.2;
+            margin-top: 4px;
+        }
+        .xf-nav-group {
+            color: #6b7280;
+            font-size: 12.5px;
+            font-weight: 600;
+            line-height: 1.2;
+            margin: 0.85rem 0 0.22rem 0;
+        }
+        .xf-nav-divider {
+            height: 1px;
+            background: #e5e7eb;
+            margin: 0.58rem 0;
+        }
+        section[data-testid="stSidebar"] summary::marker {
+            content: "";
+        }
+        section[data-testid="stSidebar"] summary::-webkit-details-marker {
+            display: none;
+        }
+        .xf-nav-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+            box-sizing: border-box;
+            color: #1f2937 !important;
+            text-decoration: none !important;
+            border-radius: 8px;
+            padding: 8px 10px 8px 8px;
+            margin: 1px 0;
+            line-height: 1.2;
+            background: transparent;
+        }
+        .xf-nav-toggle:hover {
+            background: #f3f6fb;
+            text-decoration: none !important;
+        }
+        .xf-nav-toggle-text {
+            display: inline-flex;
+            align-items: baseline;
+            min-width: 0;
+        }
+        .xf-nav-toggle-label {
+            color: #1f2937;
+            font-size: 17px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .xf-nav-toggle-subtitle {
+            color: #8b93a1;
+            font-size: 13px;
+            font-weight: 500;
+            margin-left: 5px;
+            white-space: nowrap;
+        }
+        .xf-nav-chevron {
+            color: #8b93a1;
+            flex: 0 0 auto;
+            font-size: 14px;
+            font-weight: 400;
+            line-height: 1;
+            margin-left: 10px;
+            transition: color 160ms ease, transform 160ms ease;
+        }
+        .xf-nav-toggle:hover .xf-nav-chevron {
+            color: #64748b;
+        }
+        .xf-nav-toggle.collapsed .xf-nav-chevron {
+            font-size: 16px;
+        }
+        section[data-testid="stSidebar"] button[kind="tertiary"] {
+            color: #1f2937 !important;
+            font-size: 17px !important;
+            font-weight: 600 !important;
+            line-height: 1.25 !important;
+            min-height: 34px !important;
+            padding: 0.2rem 0.2rem !important;
+            margin: 0 !important;
+            justify-content: flex-start !important;
+            background: transparent !important;
+            border: 0 !important;
+        }
+        section[data-testid="stSidebar"] button[kind="tertiary"] p {
+            font-size: 17px !important;
+            font-weight: 600 !important;
+            line-height: 1.25 !important;
+        }
+        .xf-nav-children {
+            margin: 0.18rem 0 0.28rem 1.12rem;
+        }
+        .xf-nav-link {
+            display: block;
+            color: #1f2937 !important;
+            text-decoration: none !important;
+            border-radius: 8px;
+            padding: 0.36rem 0.58rem;
+            margin: 0.16rem 0;
+            line-height: 1.18;
+        }
+        .xf-nav-link:hover {
+            background: #f3f4f6;
+            text-decoration: none !important;
+        }
+        .xf-nav-link.active {
+            background: #e8eef9;
+        }
+        .xf-nav-link.home {
+            margin-top: 0.25rem;
+        }
+        .xf-nav-link-title {
+            display: block;
+            color: #1f2937;
+            font-size: 15px;
+            font-weight: 400;
+        }
+        .xf-nav-link.home .xf-nav-link-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .xf-nav-link-subtitle {
+            display: block;
+            color: #8a94a6;
+            font-size: 12.5px;
+            margin-top: 2px;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink"] {
+            margin: 1px 0 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink"] a {
+            min-height: 30px !important;
+            padding: 0.22rem 0.5rem !important;
+            font-size: 15px !important;
+            line-height: 1.25 !important;
+        }
+        section[data-testid="stSidebar"] h3 {
+            font-size: 1rem;
+            margin-top: 1rem;
+            margin-bottom: 0.3rem;
+        }
+        section[data-testid="stSidebar"] [data-testid="stExpander"] details summary {
+            min-height: 34px;
+            padding-top: 0.25rem;
+            padding-bottom: 0.25rem;
+        }
+        section[data-testid="stSidebar"] [data-testid="stExpander"] {
+            margin-bottom: 0.35rem;
+        }
+        section[data-testid="stSidebar"] p {
+            margin-bottom: 0.25rem;
+        }
         div[data-testid="stMetric"] {
             border: 1px solid #e5e7eb;
             border-radius: 8px;
