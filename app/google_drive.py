@@ -1090,63 +1090,95 @@ def _target_years_text() -> str:
     return ", ".join(str(year) for year in years) if years else "无"
 
 
+def _sidebar_time_text(value: object) -> str:
+    if not value:
+        return "无"
+    text = str(value)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.strftime("%H:%M")
+    except ValueError:
+        match = re.search(r"\b(\d{2}:\d{2})", text)
+        return match.group(1) if match else text
+
+
+def _sidebar_sync_status() -> str:
+    st = _get_streamlit()
+    status = st.session_state.get("drive_load_status")
+    sales_loaded = st.session_state.get("clean_data") is not None
+    if isinstance(status, DriveLoadStatus) and status.sales.status == "failed":
+        return "● 同步异常"
+    if sales_loaded:
+        return "● 已同步"
+    return "● 未同步"
+
+
 def render_data_source_sidebar(show_uploaders: bool = False):
     st = _get_streamlit()
     uploaded_sales = None
     uploaded_targets = None
     with st.sidebar:
-        st.markdown("### 数据来源 / Data Source")
+        st.markdown("### 数据状态")
         status = st.session_state.get("drive_load_status")
-        if isinstance(status, DriveLoadStatus) and not status.configured:
-            st.caption("Google Drive：尚未配置")
-        elif isinstance(status, DriveLoadStatus):
-            st.caption("Google Drive：已配置")
-        else:
-            st.caption("Google Drive：未检查")
-        st.caption("系统会自动选择 Google Drive 文件夹中最新且通过校验的 Excel。")
-
-        if st.button("刷新 Google Drive 数据", use_container_width=True):
-            clear_drive_state()
-            with st.spinner("正在重新加载 Google Drive 数据..."):
-                refreshed = load_drive_business_files(force=True)
-            messages = [item.message for item in [refreshed.sales, refreshed.targets] if item.message]
-            if messages:
-                st.session_state["drive_refresh_message"] = "；".join(messages)
-            st.rerun()
-        if st.session_state.get("drive_refresh_message"):
-            st.caption(st.session_state["drive_refresh_message"])
-
-        st.markdown("**销售数据**")
         sales_loaded = st.session_state.get("clean_data") is not None
-        st.caption(f"状态：{st.session_state.get('drive_sales_status') or ('已加载' if sales_loaded else '未加载')}")
-        st.caption(f"来源：{_source_text(st.session_state.get('sales_source_type'), st.session_state.get('data_source'))}")
-        st.caption(f"当前文件名：{st.session_state.get('drive_sales_file_name') or st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or '无'}")
-        st.caption(f"Drive 修改时间：{st.session_state.get('drive_sales_modified_time') or st.session_state.get('sales_drive_modified_time') or '无'}")
-        st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_sales_loaded_at') or '无'}")
-        st.caption(f"数据截止日期：{st.session_state.get('drive_sales_max_date') or _sales_cutoff_text()}")
-        st.caption(f"数据行数：{st.session_state.get('drive_sales_row_count') or (len(st.session_state.get('clean_data')) if sales_loaded else '无')}")
-        if st.session_state.get("drive_sales_selection_reason"):
-            st.caption(f"选择依据：{st.session_state['drive_sales_selection_reason']}")
-
-        st.markdown("**目标数据**")
         target_loaded = st.session_state.get("target_data") is not None
-        st.caption(f"状态：{st.session_state.get('drive_target_status') or ('已加载' if target_loaded else '未加载')}")
-        st.caption(f"来源：{_source_text(st.session_state.get('target_source_type'), st.session_state.get('target_source'))}")
-        st.caption(f"当前文件名：{st.session_state.get('drive_target_file_name') or st.session_state.get('target_excel_name') or '无'}")
-        st.caption(f"Drive 修改时间：{st.session_state.get('drive_target_modified_time') or st.session_state.get('target_drive_modified_time') or '无'}")
-        st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_target_loaded_at') or '无'}")
-        st.caption(f"识别年度：{st.session_state.get('drive_target_year') or _target_years_text()}")
-        if st.session_state.get("drive_target_selection_reason"):
-            st.caption(f"选择依据：{st.session_state['drive_target_selection_reason']}")
+        row_count = st.session_state.get("drive_sales_row_count") or (len(st.session_state.get("clean_data")) if sales_loaded else "无")
+        loaded_at = st.session_state.get("drive_sales_loaded_at") or st.session_state.get("drive_target_loaded_at")
+        st.caption(
+            f"{_sidebar_sync_status()}\n\n"
+            f"截止：{st.session_state.get('drive_sales_max_date') or _sales_cutoff_text()}  \n"
+            f"更新：{_sidebar_time_text(loaded_at)}"
+        )
 
-        if show_uploaders:
-            with st.expander("手动上传销售数据", expanded=False):
+        with st.expander("查看数据详情", expanded=False):
+            if isinstance(status, DriveLoadStatus) and not status.configured:
+                st.caption("Google Drive：尚未配置")
+            elif isinstance(status, DriveLoadStatus):
+                st.caption("Google Drive：已配置")
+            else:
+                st.caption("Google Drive：未检查")
+
+            st.markdown("**销售数据**")
+            st.caption(f"状态：{st.session_state.get('drive_sales_status') or ('已加载' if sales_loaded else '未加载')}")
+            st.caption(f"来源：{_source_text(st.session_state.get('sales_source_type'), st.session_state.get('data_source'))}")
+            st.caption(f"当前文件名：{st.session_state.get('drive_sales_file_name') or st.session_state.get('source_file_name') or st.session_state.get('current_file_name') or '无'}")
+            st.caption(f"Drive 修改时间：{st.session_state.get('drive_sales_modified_time') or st.session_state.get('sales_drive_modified_time') or '无'}")
+            st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_sales_loaded_at') or '无'}")
+            st.caption(f"数据截止日期：{st.session_state.get('drive_sales_max_date') or _sales_cutoff_text()}")
+            st.caption(f"数据行数：{row_count}")
+            if st.session_state.get("drive_sales_selection_reason"):
+                st.caption(f"选择依据：{st.session_state['drive_sales_selection_reason']}")
+
+            st.markdown("**目标数据**")
+            st.caption(f"状态：{st.session_state.get('drive_target_status') or ('已加载' if target_loaded else '未加载')}")
+            st.caption(f"来源：{_source_text(st.session_state.get('target_source_type'), st.session_state.get('target_source'))}")
+            st.caption(f"当前文件名：{st.session_state.get('drive_target_file_name') or st.session_state.get('target_excel_name') or '无'}")
+            st.caption(f"Drive 修改时间：{st.session_state.get('drive_target_modified_time') or st.session_state.get('target_drive_modified_time') or '无'}")
+            st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_target_loaded_at') or '无'}")
+            st.caption(f"识别年度：{st.session_state.get('drive_target_year') or _target_years_text()}")
+            if st.session_state.get("drive_target_selection_reason"):
+                st.caption(f"选择依据：{st.session_state['drive_target_selection_reason']}")
+
+        with st.expander("数据同步", expanded=False):
+            if st.button("刷新 Google Drive 数据", use_container_width=True):
+                clear_drive_state()
+                with st.spinner("正在重新加载 Google Drive 数据..."):
+                    refreshed = load_drive_business_files(force=True)
+                messages = [item.message for item in [refreshed.sales, refreshed.targets] if item.message]
+                if messages:
+                    st.session_state["drive_refresh_message"] = "；".join(messages)
+                st.rerun()
+            if st.session_state.get("drive_refresh_message"):
+                st.caption(st.session_state["drive_refresh_message"])
+
+            if show_uploaders:
+                st.markdown("**手动上传销售数据**")
                 uploaded_sales = st.file_uploader(
                     "上传销售明细 / Upload Unleashed Sales Data",
                     type=["xlsx"],
                     key="sales_data_upload",
                 )
-            with st.expander("手动上传目标数据", expanded=False):
+                st.markdown("**手动上传目标数据**")
                 uploaded_targets = st.file_uploader(
                     "上传目标表 / Upload Targets Excel",
                     type=["xlsx"],
