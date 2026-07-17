@@ -1,5 +1,6 @@
 from io import BytesIO
 from html import escape
+from textwrap import dedent
 
 import streamlit as st
 
@@ -216,12 +217,14 @@ def _nav_link_html(title: str, english: str, href: str, active: bool = False, ho
         classes += " active"
     if home:
         classes += " home"
-    return f"""
+    return dedent(
+        f"""
         <a class="{classes}" href="{escape(href, quote=True)}" target="_self">
             <span class="xf-nav-link-title">{escape(title)}</span>
             <span class="xf-nav-link-subtitle">{escape(english)}</span>
         </a>
-    """
+        """
+    ).strip()
 
 
 def _nav_group_html(group: dict[str, object], current_title: str) -> str:
@@ -236,13 +239,14 @@ def _nav_group_html(group: dict[str, object], current_title: str) -> str:
         )
         for item in group["items"]
     )
-    return f"""
+    return dedent(
+        f"""
         <details class="xf-nav-group-details"{open_attr}>
             <summary class="xf-nav-toggle">
-            <span class="xf-nav-toggle-text">
-                <span class="xf-nav-toggle-label">{escape(str(group["label"]))}</span>
-                <span class="xf-nav-toggle-subtitle">{escape(str(group["english"]))}</span>
-            </span>
+                <span class="xf-nav-toggle-text">
+                    <span class="xf-nav-toggle-label">{escape(str(group["label"]))}</span>
+                    <span class="xf-nav-toggle-subtitle">{escape(str(group["english"]))}</span>
+                </span>
                 <span class="xf-nav-chevron" aria-hidden="true"></span>
             </summary>
             <div class="xf-nav-children">
@@ -250,7 +254,8 @@ def _nav_group_html(group: dict[str, object], current_title: str) -> str:
             </div>
         </details>
         <div class="xf-nav-divider"></div>
-    """
+        """
+    ).strip()
 
 
 def render_sidebar_navigation() -> None:
@@ -258,7 +263,7 @@ def render_sidebar_navigation() -> None:
 
     with st.sidebar:
         groups_html = "\n".join(_nav_group_html(group, current_title) for group in NAV_GROUPS)
-        st.markdown(
+        nav_html = dedent(
             f"""
             <div class="xf-sidebar-brand">
                 <div class="xf-sidebar-brand-title">鲜锋经营驾驶舱</div>
@@ -267,9 +272,9 @@ def render_sidebar_navigation() -> None:
             {_nav_link_html("🏠 首页", "Home", "./", active=current_title == "首页", home=True)}
             <div class="xf-nav-divider"></div>
             {groups_html}
-            """,
-            unsafe_allow_html=True,
-        )
+            """
+        ).strip()
+        st.markdown(nav_html, unsafe_allow_html=True)
 
 
 render_sidebar_navigation()
