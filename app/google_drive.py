@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 from io import BytesIO
 import json
 import logging
@@ -14,7 +15,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from app.config import METHODOLOGY_VERSION
+from app.config import LINE_ID_CANDIDATES, METHODOLOGY_VERSION
 from app.data import ImportResult, import_excel
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
 
@@ -28,12 +29,13 @@ SALES_FOLDER_NAME = "sales data"
 TARGETS_FOLDER_NAME = "targets"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
-DRIVE_CACHE_VERSION = f"drive_cache_v2_{METHODOLOGY_VERSION}"
+DRIVE_CACHE_VERSION = f"drive_cache_v4_{METHODOLOGY_VERSION}"
 CACHE_DIR = Path(".cache")
 CACHE_METADATA_PATH = CACHE_DIR / "metadata.json"
 CACHE_SALES_PATH = CACHE_DIR / "sales_clean.parquet"
 CACHE_SALES_EXTRAS_PATH = CACHE_DIR / "sales_extras.pkl"
 CACHE_TARGETS_PATH = CACHE_DIR / "targets_clean.pkl"
+MERGED_SALES_FILE_NAME = "Google Drive 合并销售数据"
 
 
 class DriveUserError(RuntimeError):
@@ -137,6 +139,13 @@ def _cache_matches(kind: str, metadata: DriveFileMetadata, cache_metadata: dict[
     )
 
 
+def _sales_cache_matches_manifest(manifest_signature: str, cache_metadata: dict[str, Any]) -> bool:
+    return (
+        cache_metadata.get("cache_version") == DRIVE_CACHE_VERSION
+        and cache_metadata.get("sales_manifest_signature") == manifest_signature
+    )
+
+
 def _restore_sales_cache(metadata: DriveFileMetadata | None = None) -> bool:
     start = _timer()
     if not CACHE_SALES_PATH.exists() or not CACHE_SALES_EXTRAS_PATH.exists():
@@ -166,6 +175,7 @@ def _restore_sales_cache(metadata: DriveFileMetadata | None = None) -> bool:
             st.session_state["drive_sales_status"] = "使用本地缓存"
             st.session_state["drive_sales_row_count"] = int(len(clean))
             st.session_state["drive_sales_max_date"] = _sales_max_date(clean)
+            _set_drive_sales_merge_stats(extras.get("merge_stats", {}))
         _perf_log("restore_sales_parquet", start, len(clean), "hit")
         return True
     except Exception:
@@ -174,20 +184,27 @@ def _restore_sales_cache(metadata: DriveFileMetadata | None = None) -> bool:
         return False
 
 
-def _write_sales_cache(metadata: DriveFileMetadata, result: ImportResult) -> None:
+def _write_sales_cache(
+    metadata: DriveFileMetadata | None,
+    result: ImportResult,
+    manifest: list[dict[str, Any]] | None = None,
+    manifest_signature: str | None = None,
+    merge_stats: dict[str, Any] | None = None,
+) -> None:
     start = _timer()
     try:
         _ensure_cache_dir()
         result.clean.to_parquet(CACHE_SALES_PATH, index=False)
         extras = {
-            "file_id": metadata.file_id,
-            "file_name": metadata.name,
-            "modified_time": metadata.modified_time,
+            "file_id": metadata.file_id if metadata else manifest_signature,
+            "file_name": metadata.name if metadata else MERGED_SALES_FILE_NAME,
+            "modified_time": metadata.modified_time if metadata else None,
             "quality": result.quality,
             "comparison": result.comparison,
             "sheet_name": result.sheet_name,
             "source_columns": list(result.raw.columns),
             "cache_created_at": _now_text(),
+            "merge_stats": merge_stats or {},
         }
         with CACHE_SALES_EXTRAS_PATH.open("wb") as handle:
             pickle.dump(extras, handle)
@@ -195,12 +212,15 @@ def _write_sales_cache(metadata: DriveFileMetadata, result: ImportResult) -> Non
         cache_metadata.update(
             {
                 "cache_version": DRIVE_CACHE_VERSION,
-                "sales_file_id": metadata.file_id,
-                "sales_modified_time": metadata.modified_time,
-                "sales_file_name": metadata.name,
-                "sales_size": metadata.size,
+                "sales_file_id": metadata.file_id if metadata else manifest_signature,
+                "sales_modified_time": metadata.modified_time if metadata else None,
+                "sales_file_name": metadata.name if metadata else MERGED_SALES_FILE_NAME,
+                "sales_size": metadata.size if metadata else None,
+                "sales_manifest": manifest or [],
+                "sales_manifest_signature": manifest_signature,
                 "sales_max_date": _sales_max_date(result.clean),
                 "cache_created_at": _now_text(),
+                "sales_merge_stats": merge_stats or {},
             }
         )
         _write_cache_metadata(cache_metadata)
@@ -265,7 +285,9 @@ def _restore_any_local_cache() -> DriveLoadStatus | None:
     if metadata.get("cache_version") != DRIVE_CACHE_VERSION:
         return None
     sales_metadata = None
-    if metadata.get("sales_file_id") and metadata.get("sales_file_name"):
+    if metadata.get("sales_manifest_signature"):
+        sales_metadata = None
+    elif metadata.get("sales_file_id") and metadata.get("sales_file_name"):
         sales_metadata = DriveFileMetadata(
             file_id=str(metadata.get("sales_file_id")),
             name=str(metadata.get("sales_file_name")),
@@ -426,6 +448,19 @@ def _parse_date_from_filename(name: str) -> pd.Timestamp | None:
         if not pd.isna(parsed):
             return parsed
     return None
+
+
+def _safe_file_id(file_id: str | None) -> str:
+    text = str(file_id or "")
+    if len(text) <= 10:
+        return text
+    return f"{text[:5]}...{text[-5:]}"
+
+
+def _date_text(value: pd.Timestamp | None) -> str:
+    if value is None or pd.isna(value):
+        return "none"
+    return str(pd.Timestamp(value).date())
 
 
 def _parse_year_from_filename(name: str) -> int | None:
@@ -634,6 +669,130 @@ def sorted_sales_candidates(candidates: list[DriveFileCandidate]) -> list[DriveF
     return sorted(candidates, key=_sales_candidate_sort_key, reverse=True)
 
 
+def _log_sales_candidates(stage: str, candidates: list[DriveFileCandidate]) -> None:
+    safe_rows = [
+        {
+            "rank": index + 1,
+            "name": candidate.metadata.name,
+            "file_id": _safe_file_id(candidate.metadata.file_id),
+            "modifiedTime": candidate.metadata.modified_time,
+            "filename_date": _date_text(candidate.filename_date),
+            "sort_date": _date_text(_sales_candidate_sort_key(candidate)[0]),
+            "reason": candidate.reason,
+        }
+        for index, candidate in enumerate(candidates)
+    ]
+    logger.info("Google Drive sales candidates %s: %s", stage, safe_rows)
+
+
+def _sales_manifest(candidates: list[DriveFileCandidate]) -> list[dict[str, Any]]:
+    return [
+        {
+            "file_id": candidate.metadata.file_id,
+            "name": candidate.metadata.name,
+            "modified_time": candidate.metadata.modified_time,
+            "size": candidate.metadata.size,
+            "filename_date": _date_text(candidate.filename_date),
+        }
+        for candidate in candidates
+    ]
+
+
+def _sales_manifest_signature(manifest: list[dict[str, Any]]) -> str:
+    payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _non_empty_count(series: pd.Series) -> int:
+    return int(series.dropna().astype(str).str.strip().ne("").sum())
+
+
+def _first_non_empty_column(df: pd.DataFrame, columns: list[str]) -> str | None:
+    for column in columns:
+        if column in df.columns and _non_empty_count(df[column]) > 0:
+            return column
+    return None
+
+
+def _complete_identity_column(df: pd.DataFrame, preferred: str, fallback: str) -> str | None:
+    if preferred in df.columns and _non_empty_count(df[preferred]) == len(df):
+        return preferred
+    if fallback in df.columns and _non_empty_count(df[fallback]) > 0:
+        return fallback
+    return _first_non_empty_column(df, [preferred, fallback])
+
+
+def _sales_dedupe_subset(df: pd.DataFrame) -> tuple[list[str], str]:
+    line_id = _first_non_empty_column(df, LINE_ID_CANDIDATES)
+    if line_id:
+        return ["Order No.", line_id], f"Order No. + {line_id}"
+
+    customer_identity = _complete_identity_column(df, "Customer Code", "Customer")
+    product_identity = _complete_identity_column(df, "Product Code", "Product")
+    subset = [
+        column
+        for column in ["Order No.", customer_identity, product_identity, "Order Date", "Quantity", "Sales Amount"]
+        if column and column in df.columns
+    ]
+    return subset, " + ".join(subset)
+
+
+def _dedupe_sales_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if df.empty:
+        return df.copy(), {"dedupe_key": "无", "duplicate_rows_removed": 0}
+    subset, label = _sales_dedupe_subset(df)
+    if not subset:
+        return df.copy(), {"dedupe_key": "无可用字段", "duplicate_rows_removed": 0}
+    before = len(df)
+    deduped = df.drop_duplicates(subset=subset, keep="first").reset_index(drop=True)
+    return deduped, {
+        "dedupe_key": label,
+        "duplicate_rows_removed": int(before - len(deduped)),
+    }
+
+
+def _sales_key_frame(df: pd.DataFrame) -> pd.DataFrame:
+    subset, _ = _sales_dedupe_subset(df)
+    if not subset:
+        return pd.DataFrame(index=df.index)
+    return df[subset].astype("string").fillna("")
+
+
+def _count_new_sales_rows(previous: pd.DataFrame | None, current: pd.DataFrame) -> int:
+    if previous is None or previous.empty:
+        return int(len(current))
+    previous_keys = _sales_key_frame(previous)
+    current_keys = _sales_key_frame(current)
+    if previous_keys.empty or current_keys.empty:
+        return int(len(current))
+    previous_set = set(map(tuple, previous_keys.to_numpy()))
+    return int(sum(tuple(row) not in previous_set for row in current_keys.to_numpy()))
+
+
+def _sales_date_range(clean: pd.DataFrame) -> tuple[str, str]:
+    dates = pd.to_datetime(clean.get("Performance Date"), errors="coerce").dropna()
+    if dates.empty:
+        return "", ""
+    return str(dates.min().date()), str(dates.max().date())
+
+
+def _set_drive_sales_merge_stats(stats: dict[str, Any]) -> None:
+    if not stats:
+        return
+    st = _get_streamlit()
+    st.session_state["drive_sales_file_count"] = stats.get("file_count")
+    st.session_state["drive_sales_input_rows"] = stats.get("input_rows")
+    st.session_state["drive_sales_deduped_rows"] = stats.get("deduped_rows")
+    st.session_state["drive_sales_duplicate_rows_removed"] = stats.get("duplicate_rows_removed")
+    st.session_state["drive_sales_new_records"] = stats.get("new_records")
+    st.session_state["drive_sales_earliest_date"] = stats.get("earliest_date")
+    st.session_state["drive_sales_latest_date"] = stats.get("latest_date")
+    st.session_state["drive_sales_dedupe_key"] = stats.get("dedupe_key")
+    st.session_state["drive_sales_failed_files"] = stats.get("failed_files", [])
+    st.session_state["drive_sales_loaded_files"] = stats.get("loaded_files", [])
+    st.session_state["drive_sales_manifest_signature"] = stats.get("manifest_signature")
+
+
 def _target_candidate_sort_key(candidate: DriveFileCandidate, analysis_year: int | None) -> tuple[int, int, pd.Timestamp]:
     year_matches = 1 if analysis_year is not None and candidate.year == analysis_year else 0
     version = candidate.version if candidate.version is not None else -1
@@ -738,7 +897,7 @@ def _validate_sales_result(result: ImportResult) -> None:
     clean = result.clean
     if clean is None or clean.empty:
         raise DriveUserError("销售文件校验失败：清洗后没有有效数据。")
-    required_columns = ["Performance Date", "Sales Amount", "Customer Code", "Product Code"]
+    required_columns = ["Performance Date", "Sales Amount"]
     missing = [column for column in required_columns if column not in clean.columns]
     if missing:
         raise DriveUserError(f"销售文件校验失败：缺少字段 {', '.join(missing)}。")
@@ -746,10 +905,14 @@ def _validate_sales_result(result: ImportResult) -> None:
         raise DriveUserError("销售文件校验失败：没有有效 Performance Date。")
     if pd.to_numeric(clean["Sales Amount"], errors="coerce").dropna().empty:
         raise DriveUserError("销售文件校验失败：没有有效 Sales Amount。")
-    if clean["Customer Code"].dropna().astype(str).str.strip().eq("").all():
-        raise DriveUserError("销售文件校验失败：没有有效 Customer Code。")
-    if clean["Product Code"].dropna().astype(str).str.strip().eq("").all():
-        raise DriveUserError("销售文件校验失败：没有有效 Product Code。")
+    customer_fields = [column for column in ["Customer Code", "Customer Key", "Customer Label", "Customer"] if column in clean.columns]
+    product_fields = [column for column in ["Product Code", "Product Key", "Product Label", "Product"] if column in clean.columns]
+    has_customer_identity = any(clean[column].dropna().astype(str).str.strip().ne("").any() for column in customer_fields)
+    has_product_identity = any(clean[column].dropna().astype(str).str.strip().ne("").any() for column in product_fields)
+    if not has_customer_identity:
+        raise DriveUserError("销售文件校验失败：没有有效客户标识。")
+    if not has_product_identity:
+        raise DriveUserError("销售文件校验失败：没有有效产品标识。")
 
 
 def _validate_target_workbook(parsed: XFTargetWorkbook) -> None:
@@ -782,6 +945,28 @@ def _set_drive_sales_success(metadata: DriveFileMetadata, result: ImportResult, 
     st.session_state["drive_sales_max_date"] = _sales_max_date(result.clean)
     st.session_state["drive_sales_selection_reason"] = reason
     st.session_state["drive_sales_candidates"] = [candidate.metadata.name for candidate in candidates[:10]]
+
+
+def _set_drive_sales_merge_success(
+    result: ImportResult,
+    candidates: list[DriveFileCandidate],
+    manifest_signature: str,
+    merge_stats: dict[str, Any],
+) -> None:
+    st = _get_streamlit()
+    st.session_state["drive_sales_file_id"] = manifest_signature
+    st.session_state["drive_sales_file_name"] = MERGED_SALES_FILE_NAME
+    st.session_state["drive_sales_modified_time"] = max(
+        (candidate.metadata.modified_time or "" for candidate in candidates),
+        default="",
+    )
+    st.session_state["drive_sales_loaded_at"] = _now_text()
+    st.session_state["drive_sales_status"] = "已连接"
+    st.session_state["drive_sales_row_count"] = int(len(result.clean))
+    st.session_state["drive_sales_max_date"] = _sales_max_date(result.clean)
+    st.session_state["drive_sales_selection_reason"] = "合并 sales data 文件夹内全部销售 Excel"
+    st.session_state["drive_sales_candidates"] = [candidate.metadata.name for candidate in candidates[:20]]
+    _set_drive_sales_merge_stats(merge_stats)
 
 
 def _set_drive_target_success(metadata: DriveFileMetadata, parsed: XFTargetWorkbook, reason: str, candidates: list[DriveFileCandidate]) -> None:
@@ -837,7 +1022,10 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
     ):
         return DriveLoadItemStatus("skipped", "当前会话已手动上传销售数据，优先使用手动上传。")
     try:
-        candidates = sorted_sales_candidates(list_drive_excel_candidates(service, config.folder_id, SALES_FOLDER_NAME))
+        raw_candidates = list_drive_excel_candidates(service, config.folder_id, SALES_FOLDER_NAME)
+        _log_sales_candidates("scanned", raw_candidates)
+        candidates = sorted_sales_candidates(raw_candidates)
+        _log_sales_candidates("sorted", candidates)
     except DriveUserError:
         if st.session_state.get("clean_data") is not None:
             st.session_state["drive_sales_status"] = "使用上次成功版本"
@@ -849,27 +1037,44 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             return DriveLoadItemStatus("using_previous", "Drive 中未找到有效销售文件，当前继续使用本次会话已加载数据。")
         raise DriveUserError("Drive 中未找到有效销售 Excel 文件。")
 
-    current_id = st.session_state.get("drive_sales_file_id")
-    current_modified = st.session_state.get("drive_sales_modified_time")
-    latest_metadata = candidates[0].metadata
-    if (
-        st.session_state.get("clean_data") is not None
-        and current_id
-        and current_modified
-        and latest_metadata.file_id == current_id
-        and latest_metadata.modified_time == current_modified
-    ):
+    manifest = _sales_manifest(candidates)
+    manifest_signature = _sales_manifest_signature(manifest)
+    current_signature = st.session_state.get("drive_sales_manifest_signature") or st.session_state.get("drive_sales_file_id")
+    logger.info(
+        "Google Drive sales folder manifest files=%s signature=%s force=%s current_signature=%s",
+        [candidate.metadata.name for candidate in candidates],
+        _safe_file_id(manifest_signature),
+        force,
+        _safe_file_id(str(current_signature) if current_signature else None),
+    )
+    if st.session_state.get("clean_data") is not None and current_signature == manifest_signature:
         st.session_state["drive_sales_status"] = "已是最新"
-        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", latest_metadata.name, latest_metadata.modified_time, latest_metadata.file_id)
+        return DriveLoadItemStatus("unchanged", "当前已是最新数据。", MERGED_SALES_FILE_NAME, None, manifest_signature)
 
     cache_metadata = _read_cache_metadata()
-    if _cache_matches("sales", latest_metadata, cache_metadata) and _restore_sales_cache(latest_metadata):
-        return DriveLoadItemStatus("cached", "销售数据已从本地缓存加载。", latest_metadata.name, latest_metadata.modified_time, latest_metadata.file_id)
+    if _sales_cache_matches_manifest(manifest_signature, cache_metadata) and _restore_sales_cache(None):
+        st.session_state["drive_sales_manifest_signature"] = manifest_signature
+        return DriveLoadItemStatus("cached", "销售数据已从本地缓存加载。", MERGED_SALES_FILE_NAME, None, manifest_signature)
 
     failures: list[str] = []
+    imported_results: list[tuple[DriveFileCandidate, ImportResult]] = []
+    previous_clean = None
+    if CACHE_SALES_PATH.exists():
+        try:
+            previous_clean = pd.read_parquet(CACHE_SALES_PATH)
+        except Exception:
+            previous_clean = None
+    logger.info("Google Drive sales candidate attempt order: %s", [candidate.metadata.name for candidate in candidates])
     for candidate in candidates:
         metadata = candidate.metadata
         try:
+            logger.info(
+                "Google Drive sales attempting file name=%s file_id=%s modifiedTime=%s filename_date=%s",
+                metadata.name,
+                _safe_file_id(metadata.file_id),
+                metadata.modified_time,
+                _date_text(candidate.filename_date),
+            )
             content = download_drive_file(service, metadata.file_id).getvalue()
             result = import_excel(_NamedBytesIO(content, metadata.name))
             _validate_sales_result(result)
@@ -882,21 +1087,94 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             logger.warning("Google Drive sales candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
             continue
         except Exception as exc:
-            failures.append(f"{metadata.name}: 解析失败")
+            failures.append(f"{metadata.name}: 解析失败（{exc.__class__.__name__}: {exc}）")
             logger.exception("Google Drive sales parse failed file_name=%s", metadata.name)
             continue
-        store_sales_import_in_session(result, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time)
-        st.session_state["sales_drive_file_id"] = metadata.file_id
-        st.session_state["sales_drive_modified_time"] = metadata.modified_time
-        _set_drive_sales_success(metadata, result, candidate.reason, candidates)
-        _write_sales_cache(metadata, result)
-        logger.info("Google Drive sales selected file=%s reason=%s", metadata.name, candidate.reason)
-        return DriveLoadItemStatus("loaded", "销售数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
+        imported_results.append((candidate, result))
+
+    if imported_results:
+        raw_frames = [result.raw for _, result in imported_results if result.raw is not None]
+        clean_frames = [result.clean for _, result in imported_results if result.clean is not None and not result.clean.empty]
+        combined_raw = pd.concat(raw_frames, ignore_index=True, sort=False) if raw_frames else pd.DataFrame()
+        combined_clean = pd.concat(clean_frames, ignore_index=True, sort=False) if clean_frames else pd.DataFrame()
+        input_rows = int(len(combined_clean))
+        deduped_clean, dedupe_stats = _dedupe_sales_rows(combined_clean)
+        earliest_date, latest_date = _sales_date_range(deduped_clean)
+        new_records = _count_new_sales_rows(previous_clean, deduped_clean)
+        loaded_files = [candidate.metadata.name for candidate, _ in imported_results]
+        merge_stats = {
+            "file_count": len(imported_results),
+            "candidate_file_count": len(candidates),
+            "input_rows": input_rows,
+            "deduped_rows": int(len(deduped_clean)),
+            "duplicate_rows_removed": dedupe_stats["duplicate_rows_removed"],
+            "new_records": new_records,
+            "earliest_date": earliest_date,
+            "latest_date": latest_date,
+            "dedupe_key": dedupe_stats["dedupe_key"],
+            "failed_files": failures,
+            "loaded_files": loaded_files,
+            "manifest_signature": manifest_signature,
+        }
+        quality = dict(imported_results[0][1].quality)
+        quality.update(
+            {
+                "Google Drive 读取文件数": len(imported_results),
+                "Google Drive 候选文件数": len(candidates),
+                "Google Drive 合并前行数": input_rows,
+                "Google Drive 去重后行数": int(len(deduped_clean)),
+                "Google Drive 跨文件去重行数": dedupe_stats["duplicate_rows_removed"],
+                "Google Drive 本次新增记录数": new_records,
+                "Google Drive 最早日期": earliest_date,
+                "Google Drive 最新日期": latest_date,
+                "Google Drive 去重键": dedupe_stats["dedupe_key"],
+                "Google Drive 读取失败文件": "；".join(failures) if failures else "无",
+            }
+        )
+        result = ImportResult(
+            raw=combined_raw,
+            clean=deduped_clean,
+            quality=quality,
+            sheet_name="; ".join(f"{candidate.metadata.name}:{import_result.sheet_name}" for candidate, import_result in imported_results),
+            comparison={},
+        )
+        store_sales_import_in_session(result, MERGED_SALES_FILE_NAME, DRIVE_SOURCE_LABEL, "drive", None)
+        st.session_state["sales_drive_file_id"] = manifest_signature
+        st.session_state["sales_drive_modified_time"] = max((candidate.metadata.modified_time or "" for candidate in candidates), default="")
+        _set_drive_sales_merge_success(result, candidates, manifest_signature, merge_stats)
+        _write_sales_cache(None, result, manifest, manifest_signature, merge_stats)
+        if failures:
+            st.session_state["drive_sales_status"] = "部分文件失败"
+            st.session_state["drive_sales_failure_details"] = failures
+        else:
+            st.session_state.pop("drive_sales_failure_details", None)
+            st.session_state.pop("drive_sales_content_warning", None)
+        logger.info(
+            "Google Drive sales merged files=%s input_rows=%s deduped_rows=%s duplicate_rows_removed=%s new_records=%s earliest=%s latest=%s failed=%s",
+            loaded_files,
+            input_rows,
+            len(deduped_clean),
+            dedupe_stats["duplicate_rows_removed"],
+            new_records,
+            earliest_date,
+            latest_date,
+            failures,
+        )
+        message = (
+            f"销售数据已合并 {len(imported_results)} 个 Google Drive 文件；"
+            f"合并前 {input_rows:,} 行，去重后 {len(deduped_clean):,} 行，"
+            f"本次新增 {new_records:,} 行。"
+        )
+        if failures:
+            message = f"{message} 部分文件读取失败：{'；'.join(failures)}"
+        return DriveLoadItemStatus("loaded", message, MERGED_SALES_FILE_NAME, None, manifest_signature)
 
     if st.session_state.get("clean_data") is not None:
         st.session_state["drive_sales_status"] = "使用上次成功版本"
+        st.session_state["drive_sales_failure_details"] = failures
         logger.warning("Google Drive sales all candidates failed, keeping previous data")
-        return DriveLoadItemStatus("using_previous", "最新文件解析失败，当前继续使用上一次成功数据。")
+        detail = "；".join(failures) if failures else "未记录具体原因"
+        return DriveLoadItemStatus("using_previous", f"最新销售文件解析失败，当前继续使用上一次成功数据。失败原因：{detail}")
     raise DriveUserError("Google Drive 未找到可解析的销售 Excel 文件。")
 
 
@@ -1148,6 +1426,18 @@ def render_data_source_sidebar(show_uploaders: bool = False):
             st.caption(f"数据行数：{row_count}")
             if st.session_state.get("drive_sales_selection_reason"):
                 st.caption(f"选择依据：{st.session_state['drive_sales_selection_reason']}")
+            if st.session_state.get("drive_sales_file_count"):
+                st.caption(f"读取文件数：{st.session_state.get('drive_sales_file_count')}")
+                st.caption(f"合并前总行数：{st.session_state.get('drive_sales_input_rows')}")
+                st.caption(f"去重后总行数：{st.session_state.get('drive_sales_deduped_rows')}")
+                st.caption(f"跨文件去重行数：{st.session_state.get('drive_sales_duplicate_rows_removed')}")
+                st.caption(f"本次新增记录数：{st.session_state.get('drive_sales_new_records')}")
+                st.caption(f"数据日期范围：{st.session_state.get('drive_sales_earliest_date') or '无'} 至 {st.session_state.get('drive_sales_latest_date') or '无'}")
+                st.caption(f"去重键：{st.session_state.get('drive_sales_dedupe_key') or '无'}")
+            if st.session_state.get("drive_sales_failed_files"):
+                st.caption("读取失败文件：")
+                for failure in st.session_state.get("drive_sales_failed_files", []):
+                    st.caption(f"- {failure}")
 
             st.markdown("**目标数据**")
             st.caption(f"状态：{st.session_state.get('drive_target_status') or ('已加载' if target_loaded else '未加载')}")
