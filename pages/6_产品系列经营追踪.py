@@ -217,6 +217,42 @@ def _prior_full_month_from_targets(amount_targets: pd.DataFrame | None, ctx, pro
     return float(values.sum())
 
 
+def _monthly_target_detail(amount_targets: pd.DataFrame | None, table: pd.DataFrame, ctx, product_range: str | None) -> pd.DataFrame:
+    columns = ["Product Group", "Target", "Included?", "Reason"]
+    if amount_targets is None or amount_targets.empty:
+        return pd.DataFrame(columns=columns)
+    required = {"Year", "Month", RANGE_COLUMN}
+    if not required.issubset(amount_targets.columns):
+        return pd.DataFrame(columns=columns)
+
+    rows = amount_targets[
+        amount_targets["Year"].astype("Int64").eq(int(ctx.year))
+        & amount_targets["Month"].astype("Int64").eq(int(ctx.month))
+        & ~amount_targets[RANGE_COLUMN].astype(str).eq("公司整体")
+    ].copy()
+    if product_range and product_range != "全部":
+        rows = rows[rows[RANGE_COLUMN].astype(str).eq(str(product_range))]
+    if rows.empty:
+        return pd.DataFrame(columns=columns)
+
+    value_col = "Revised Target" if "Revised Target" in rows.columns else "Original Target"
+    rows["Target"] = pd.to_numeric(rows[value_col], errors="coerce").fillna(0)
+    detail = rows.groupby(RANGE_COLUMN, dropna=False)["Target"].sum().reset_index()
+    visible_ranges = set(table["产品系列"].dropna().astype(str)) if "产品系列" in table.columns else set()
+    detail["Included?"] = detail["Target"].gt(0).map(lambda value: "Yes" if value else "No")
+    detail["Reason"] = detail.apply(
+        lambda row: (
+            "Included from target table; matched sales overview"
+            if str(row[RANGE_COLUMN]) in visible_ranges
+            else "Included from target table; no current-month sales row"
+        )
+        if row["Target"] > 0
+        else "Target is blank or zero",
+        axis=1,
+    )
+    return detail.rename(columns={RANGE_COLUMN: "Product Group"})[columns]
+
+
 def _render_total_summary(
     table: pd.DataFrame,
     filtered_data: pd.DataFrame,
@@ -232,7 +268,10 @@ def _render_total_summary(
     if prior_full_sales is None:
         prior_full_sales = _total_sales_between(filtered_data, prior_full_start, prior_full_end, product_range)
     prior_full_gap = None if prior_full_sales == 0 else current_sales - prior_full_sales
-    targets = pd.to_numeric(table["本月目标"], errors="coerce").dropna()
+    target_detail = _monthly_target_detail(amount_targets, table, ctx, product_range)
+    targets = pd.to_numeric(target_detail["Target"], errors="coerce").dropna() if not target_detail.empty else pd.Series(dtype="float64")
+    if targets.empty:
+        targets = pd.to_numeric(table["本月目标"], errors="coerce").dropna()
     monthly_target = None if targets.empty else float(targets.sum())
     completion = None if not monthly_target else current_sales / monthly_target
     gap = None if monthly_target is None else current_sales - monthly_target
@@ -265,6 +304,11 @@ def _render_total_summary(
         """,
         unsafe_allow_html=True,
     )
+    if not target_detail.empty:
+        with st.expander("目标汇总明细", expanded=False):
+            display = target_detail.copy()
+            display["Target"] = display["Target"].map(_fmt_money)
+            st.dataframe(display, width="stretch", hide_index=True)
 
 
 def _range_label_options(df: pd.DataFrame) -> list[str]:
