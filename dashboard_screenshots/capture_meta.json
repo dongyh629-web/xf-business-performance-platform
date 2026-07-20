@@ -1,0 +1,700 @@
+[
+  {
+    "name": "首页",
+    "safeName": "01_首页",
+    "url": "http://127.0.0.1:8501/",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/01_首页_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 3181,
+      "scrollTop": 0,
+      "title": "XF Business Dashboard",
+      "url": "http://127.0.0.1:8501/",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/01_首页_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3181,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/01_首页_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3181,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/01_首页_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3181,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/01_首页_seg_03_1770.png",
+        "scrollTop": 1770,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3181,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/01_首页_seg_04_2360.png",
+        "scrollTop": 2360,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3181,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/01_首页_seg_05_2461.png",
+        "scrollTop": 2461,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3181,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/01_首页_full.png"
+  },
+  {
+    "name": "数据质量中心",
+    "safeName": "02_数据质量中心",
+    "url": "http://127.0.0.1:8501/%E6%95%B0%E6%8D%AE%E8%B4%A8%E9%87%8F%E4%B8%AD%E5%BF%83",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/02_数据质量中心_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 2098,
+      "scrollTop": 0,
+      "title": "数据质量中心",
+      "url": "http://127.0.0.1:8501/%E6%95%B0%E6%8D%AE%E8%B4%A8%E9%87%8F%E4%B8%AD%E5%BF%83",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/02_数据质量中心_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2098,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/02_数据质量中心_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2098,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/02_数据质量中心_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2098,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/02_数据质量中心_seg_03_1378.png",
+        "scrollTop": 1378,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2098,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/02_数据质量中心_full.png"
+  },
+  {
+    "name": "客户分析",
+    "safeName": "03_客户分析",
+    "url": "http://127.0.0.1:8501/%E5%AE%A2%E6%88%B7%E5%88%86%E6%9E%90",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/03_客户分析_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 3923,
+      "scrollTop": 0,
+      "title": "客户分析",
+      "url": "http://127.0.0.1:8501/%E5%AE%A2%E6%88%B7%E5%88%86%E6%9E%90",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/03_客户分析_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3923,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/03_客户分析_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3923,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/03_客户分析_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3923,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/03_客户分析_seg_03_1770.png",
+        "scrollTop": 1770,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3923,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/03_客户分析_seg_04_2360.png",
+        "scrollTop": 2360,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 3923,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/03_客户分析_full.png"
+  },
+  {
+    "name": "产品分析",
+    "safeName": "04_产品分析",
+    "url": "http://127.0.0.1:8501/%E4%BA%A7%E5%93%81%E5%88%86%E6%9E%90",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/04_产品分析_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 2078,
+      "scrollTop": 0,
+      "title": "产品分析",
+      "url": "http://127.0.0.1:8501/%E4%BA%A7%E5%93%81%E5%88%86%E6%9E%90",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/04_产品分析_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2078,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/04_产品分析_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2078,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/04_产品分析_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2078,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/04_产品分析_seg_03_1358.png",
+        "scrollTop": 1358,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2078,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/04_产品分析_full.png"
+  },
+  {
+    "name": "经营追踪",
+    "safeName": "05_经营追踪",
+    "url": "http://127.0.0.1:8501/%E7%BB%8F%E8%90%A5%E8%BF%BD%E8%B8%AA",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/05_经营追踪_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 4204,
+      "scrollTop": 0,
+      "title": "经营追踪",
+      "url": "http://127.0.0.1:8501/%E7%BB%8F%E8%90%A5%E8%BF%BD%E8%B8%AA",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/05_经营追踪_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 4204,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/05_经营追踪_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 4204,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/05_经营追踪_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 4204,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/05_经营追踪_seg_03_1770.png",
+        "scrollTop": 1770,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 4204,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/05_经营追踪_seg_04_2360.png",
+        "scrollTop": 2360,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 4204,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/05_经营追踪_seg_05_2950.png",
+        "scrollTop": 2950,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 4204,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/05_经营追踪_full.png"
+  },
+  {
+    "name": "客户健康",
+    "safeName": "06_客户健康",
+    "url": "http://127.0.0.1:8501/%E5%AE%A2%E6%88%B7%E5%81%A5%E5%BA%B7",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/06_客户健康_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 7651,
+      "scrollTop": 0,
+      "title": "客户健康",
+      "url": "http://127.0.0.1:8501/%E5%AE%A2%E6%88%B7%E5%81%A5%E5%BA%B7",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_03_1770.png",
+        "scrollTop": 1770,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_04_2360.png",
+        "scrollTop": 2360,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_05_2950.png",
+        "scrollTop": 2950,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_06_3540.png",
+        "scrollTop": 3540,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_07_4130.png",
+        "scrollTop": 4130,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_08_4720.png",
+        "scrollTop": 4720,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_09_5310.png",
+        "scrollTop": 5310,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_10_5900.png",
+        "scrollTop": 5900,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_11_6490.png",
+        "scrollTop": 6490,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/06_客户健康_seg_12_6931.png",
+        "scrollTop": 6931,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 7651,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/06_客户健康_full.png"
+  },
+  {
+    "name": "产品系列经营追踪",
+    "safeName": "07_产品系列经营追踪",
+    "url": "http://127.0.0.1:8501/%E4%BA%A7%E5%93%81%E7%B3%BB%E5%88%97%E7%BB%8F%E8%90%A5%E8%BF%BD%E8%B8%AA",
+    "firstFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/07_产品系列经营追踪_first.png",
+    "dims": {
+      "clientHeight": 720,
+      "rect": {
+        "height": 720,
+        "width": 1024,
+        "x": 256,
+        "y": 0
+      },
+      "scrollHeight": 2778,
+      "scrollTop": 0,
+      "title": "产品系列经营追踪",
+      "url": "http://127.0.0.1:8501/%E4%BA%A7%E5%93%81%E7%B3%BB%E5%88%97%E7%BB%8F%E8%90%A5%E8%BF%BD%E8%B8%AA",
+      "viewport": {
+        "height": 720,
+        "width": 1280
+      }
+    },
+    "segments": [
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/07_产品系列经营追踪_seg_00_0.png",
+        "scrollTop": 0,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2778,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/07_产品系列经营追踪_seg_01_590.png",
+        "scrollTop": 590,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2778,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/07_产品系列经营追踪_seg_02_1180.png",
+        "scrollTop": 1180,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2778,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/07_产品系列经营追踪_seg_03_1770.png",
+        "scrollTop": 1770,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2778,
+        "clientHeight": 720
+      },
+      {
+        "file": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/_segments/07_产品系列经营追踪_seg_04_2059.png",
+        "scrollTop": 2058.5,
+        "rect": {
+          "height": 720,
+          "width": 1024,
+          "x": 256,
+          "y": 0
+        },
+        "scrollHeight": 2778,
+        "clientHeight": 720
+      }
+    ],
+    "fullFile": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/dashboard_screenshots/07_产品系列经营追踪_full.png"
+  }
+]

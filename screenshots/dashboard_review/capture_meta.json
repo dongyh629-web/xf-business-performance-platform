@@ -1,0 +1,305 @@
+[
+  {
+    "page": "首页",
+    "nav": "app",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/01_首页_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/01_首页_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [
+      "页面包含业务提示或警告文本。"
+    ],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/01_首页_00.png",
+        "actualTop": 0,
+        "scrollHeight": 2914,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/01_首页_01.png",
+        "actualTop": 820,
+        "scrollHeight": 2914,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/01_首页_02.png",
+        "actualTop": 1640,
+        "scrollHeight": 2914,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/01_首页_03.png",
+        "actualTop": 1914,
+        "scrollHeight": 2914,
+        "clientHeight": 1000
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/",
+    "mainNodeId": "14",
+    "mainScrollHeight": 2914,
+    "mainClientHeight": 1000
+  },
+  {
+    "page": "数据质量中心",
+    "nav": "数据质量中心",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/02_数据质量中心_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/02_数据质量中心_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [
+      "页面包含业务提示或警告文本。"
+    ],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/02_数据质量中心_00.png",
+        "actualTop": 0,
+        "scrollHeight": 2098,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/02_数据质量中心_01.png",
+        "actualTop": 820,
+        "scrollHeight": 2098,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/02_数据质量中心_02.png",
+        "actualTop": 1098,
+        "scrollHeight": 2098,
+        "clientHeight": 1000
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/%E6%95%B0%E6%8D%AE%E8%B4%A8%E9%87%8F%E4%B8%AD%E5%BF%83",
+    "mainScrollHeight": 2098,
+    "mainClientHeight": 1000
+  },
+  {
+    "page": "客户分析",
+    "nav": "客户分析",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/03_客户分析_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/03_客户分析_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [
+      "页面包含业务提示或警告文本。"
+    ],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/03_客户分析_00.png",
+        "actualTop": 0,
+        "scrollHeight": 3563,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/03_客户分析_01.png",
+        "actualTop": 820,
+        "scrollHeight": 3563,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/03_客户分析_02.png",
+        "actualTop": 1640,
+        "scrollHeight": 3563,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/03_客户分析_03.png",
+        "actualTop": 2460,
+        "scrollHeight": 3563,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/03_客户分析_04.png",
+        "actualTop": 2563,
+        "scrollHeight": 3563,
+        "clientHeight": 1000
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/%E5%AE%A2%E6%88%B7%E5%88%86%E6%9E%90",
+    "mainNodeId": "14",
+    "mainScrollHeight": 3563,
+    "mainClientHeight": 1000
+  },
+  {
+    "page": "产品分析",
+    "nav": "产品分析",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/04_产品分析_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/04_产品分析_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/04_产品分析_00.png",
+        "actualTop": 0,
+        "scrollHeight": 1838,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/04_产品分析_01.png",
+        "actualTop": 820,
+        "scrollHeight": 1838,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/04_产品分析_02.png",
+        "actualTop": 838,
+        "scrollHeight": 1838,
+        "clientHeight": 1000
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/%E4%BA%A7%E5%93%81%E5%88%86%E6%9E%90",
+    "mainNodeId": "14",
+    "mainScrollHeight": 1838,
+    "mainClientHeight": 1000
+  },
+  {
+    "page": "经营追踪",
+    "nav": "经营追踪",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/05_经营追踪_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/05_经营追踪_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/05_经营追踪_00.png",
+        "actualTop": 0,
+        "scrollHeight": 4204,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/05_经营追踪_01.png",
+        "actualTop": 820,
+        "scrollHeight": 4204,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/05_经营追踪_02.png",
+        "actualTop": 1640,
+        "scrollHeight": 4204,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/05_经营追踪_03.png",
+        "actualTop": 2460,
+        "scrollHeight": 4204,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/05_经营追踪_04.png",
+        "actualTop": 3204.5,
+        "clientHeight": 1000,
+        "scrollHeight": 4204
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/%E7%BB%8F%E8%90%A5%E8%BF%BD%E8%B8%AA",
+    "mainScrollHeight": 4204,
+    "mainClientHeight": 1000
+  },
+  {
+    "page": "客户健康",
+    "nav": "客户健康",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/06_客户健康_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/06_客户健康_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [
+      "页面包含业务提示或警告文本。"
+    ],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_00.png",
+        "actualTop": 0,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_01.png",
+        "actualTop": 820,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_02.png",
+        "actualTop": 1640,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_03.png",
+        "actualTop": 2460,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_04.png",
+        "actualTop": 3280,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_05.png",
+        "actualTop": 4100,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_06.png",
+        "actualTop": 4920,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_07.png",
+        "actualTop": 5740,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/06_客户健康_08.png",
+        "actualTop": 6424.5,
+        "scrollHeight": 7424,
+        "clientHeight": 1000
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/%E5%AE%A2%E6%88%B7%E5%81%A5%E5%BA%B7",
+    "mainNodeId": "14",
+    "mainScrollHeight": 7424,
+    "mainClientHeight": 1000
+  },
+  {
+    "page": "产品系列经营追踪",
+    "nav": "产品系列经营追踪",
+    "firstPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/07_产品系列经营追踪_first.png",
+    "fullPath": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/07_产品系列经营追踪_full.png",
+    "entered": true,
+    "errors": [],
+    "warnings": [],
+    "segments": [
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/07_产品系列经营追踪_00.png",
+        "actualTop": 0,
+        "scrollHeight": 2634,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/07_产品系列经营追踪_01.png",
+        "actualTop": 820,
+        "scrollHeight": 2634,
+        "clientHeight": 1000
+      },
+      {
+        "path": "/Users/dongyuhan/Documents/Codex/xf-business-performance-platform/screenshots/dashboard_review/_tmp_segments/07_产品系列经营追踪_02.png",
+        "actualTop": 1634.5,
+        "scrollHeight": 2634,
+        "clientHeight": 1000
+      }
+    ],
+    "url": "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/%E4%BA%A7%E5%93%81%E7%B3%BB%E5%88%97%E7%BB%8F%E8%90%A5%E8%BF%BD%E8%B8%AA",
+    "mainNodeId": "14",
+    "mainScrollHeight": 2634,
+    "mainClientHeight": 1000
+  }
+]

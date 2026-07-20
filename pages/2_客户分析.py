@@ -3,6 +3,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from app.auth import require_login
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
 from app.customer_metrics import abc_distribution, build_customer_summary, concentration_metrics
 from app.data import monthly_sales, top_entity_table, top_table
@@ -86,6 +87,7 @@ def _iqr_text(value: object) -> str:
 
 st.set_page_config(page_title="客户分析", layout="wide")
 inject_global_styles()
+require_login("customer_analysis")
 st.title("客户分析")
 st.caption("Customer Intelligence")
 st.caption("了解客户贡献、结构和购买表现")

@@ -1393,6 +1393,13 @@ def _sidebar_sync_status() -> str:
 
 def render_data_source_sidebar(show_uploaders: bool = False):
     st = _get_streamlit()
+    try:
+        from app.auth import current_user, role_allows
+
+        user = current_user()
+        can_use_data_sync = bool(user and role_allows(user.role, "data_sync"))
+    except Exception:
+        can_use_data_sync = False
     uploaded_sales = None
     uploaded_targets = None
     with st.sidebar:
@@ -1449,29 +1456,30 @@ def render_data_source_sidebar(show_uploaders: bool = False):
             if st.session_state.get("drive_target_selection_reason"):
                 st.caption(f"选择依据：{st.session_state['drive_target_selection_reason']}")
 
-        with st.expander("数据同步", expanded=False):
-            if st.button("刷新 Google Drive 数据", use_container_width=True):
-                clear_drive_state()
-                with st.spinner("正在重新加载 Google Drive 数据..."):
-                    refreshed = load_drive_business_files(force=True)
-                messages = [item.message for item in [refreshed.sales, refreshed.targets] if item.message]
-                if messages:
-                    st.session_state["drive_refresh_message"] = "；".join(messages)
-                st.rerun()
-            if st.session_state.get("drive_refresh_message"):
-                st.caption(st.session_state["drive_refresh_message"])
+        if can_use_data_sync:
+            with st.expander("数据同步", expanded=False):
+                if st.button("刷新 Google Drive 数据", use_container_width=True):
+                    clear_drive_state()
+                    with st.spinner("正在重新加载 Google Drive 数据..."):
+                        refreshed = load_drive_business_files(force=True)
+                    messages = [item.message for item in [refreshed.sales, refreshed.targets] if item.message]
+                    if messages:
+                        st.session_state["drive_refresh_message"] = "；".join(messages)
+                    st.rerun()
+                if st.session_state.get("drive_refresh_message"):
+                    st.caption(st.session_state["drive_refresh_message"])
 
-            if show_uploaders:
-                st.markdown("**手动上传销售数据**")
-                uploaded_sales = st.file_uploader(
-                    "上传销售明细 / Upload Unleashed Sales Data",
-                    type=["xlsx"],
-                    key="sales_data_upload",
-                )
-                st.markdown("**手动上传目标数据**")
-                uploaded_targets = st.file_uploader(
-                    "上传目标表 / Upload Targets Excel",
-                    type=["xlsx"],
-                    key="sidebar_target_excel_upload",
-                )
+                if show_uploaders:
+                    st.markdown("**手动上传销售数据**")
+                    uploaded_sales = st.file_uploader(
+                        "上传销售明细 / Upload Unleashed Sales Data",
+                        type=["xlsx"],
+                        key="sales_data_upload",
+                    )
+                    st.markdown("**手动上传目标数据**")
+                    uploaded_targets = st.file_uploader(
+                        "上传目标表 / Upload Targets Excel",
+                        type=["xlsx"],
+                        key="sidebar_target_excel_upload",
+                    )
     return uploaded_sales, uploaded_targets

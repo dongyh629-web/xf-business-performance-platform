@@ -4,6 +4,7 @@ from textwrap import dedent
 
 import streamlit as st
 
+from app.auth import local_preview_login, render_logout_button, render_user_sidebar, require_login, role_allows
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, monthly_sales, top_entity_table, top_table
 from app.google_drive import (
@@ -19,6 +20,11 @@ from app.ui import bar_chart, donut_chart, inject_global_styles, line_chart, met
 
 st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout="wide")
 inject_global_styles()
+
+if st.query_params.get("auth_preview"):
+    local_preview_login(str(st.query_params.get("auth_preview")))
+
+auth_user = require_login("overview")
 
 def render_home_page() -> None:
     st.title("首页概况")
@@ -150,25 +156,15 @@ customer_health_page = st.Page("pages/5_客户健康.py", title="客户健康")
 product_analysis_page = st.Page("pages/3_产品分析.py", title="产品分析")
 data_quality_page = st.Page("pages/1_数据质量中心.py", title="数据质量")
 
-pages = {
-    "": [
-        home_page,
-    ],
-    "📈 销售": [
-        sales_tracking_page,
-        product_range_page,
-    ],
-    "👥 客户": [
-        customer_analysis_page,
-        customer_health_page,
-    ],
-    "📦 产品": [
-        product_analysis_page,
-    ],
-    "⚙️ 系统": [
-        data_quality_page,
-    ],
-}
+pages = {"": [home_page]}
+if role_allows(auth_user.role, "sales"):
+    pages["📈 销售"] = [sales_tracking_page, product_range_page]
+if role_allows(auth_user.role, "customers"):
+    pages["👥 客户"] = [customer_analysis_page, customer_health_page]
+if role_allows(auth_user.role, "products"):
+    pages["📦 产品"] = [product_analysis_page]
+if role_allows(auth_user.role, "system"):
+    pages["⚙️ 系统"] = [data_quality_page]
 
 current_page = st.navigation(pages, position="hidden")
 
@@ -176,6 +172,7 @@ current_page = st.navigation(pages, position="hidden")
 NAV_GROUPS = [
     {
         "key": "sales",
+        "area": "sales",
         "label": "📈 销售",
         "english": "Sales",
         "items": [
@@ -185,6 +182,7 @@ NAV_GROUPS = [
     },
     {
         "key": "customers",
+        "area": "customers",
         "label": "👥 客户",
         "english": "Customers",
         "items": [
@@ -194,6 +192,7 @@ NAV_GROUPS = [
     },
     {
         "key": "products",
+        "area": "products",
         "label": "📦 产品",
         "english": "Products",
         "items": [
@@ -202,6 +201,7 @@ NAV_GROUPS = [
     },
     {
         "key": "system",
+        "area": "system",
         "label": "⚙️ 系统",
         "english": "System",
         "items": [
@@ -260,21 +260,29 @@ def _nav_group_html(group: dict[str, object], current_title: str) -> str:
 
 def render_sidebar_navigation() -> None:
     current_title = getattr(current_page, "title", "首页")
+    visible_groups = [group for group in NAV_GROUPS if role_allows(auth_user.role, str(group["area"]))]
 
     with st.sidebar:
-        groups_html = "\n".join(_nav_group_html(group, current_title) for group in NAV_GROUPS)
-        nav_html = dedent(
-            f"""
+        groups_html = "\n".join(_nav_group_html(group, current_title) for group in visible_groups)
+        brand_html = dedent(
+            """
             <div class="xf-sidebar-brand">
                 <div class="xf-sidebar-brand-title">鲜锋经营驾驶舱</div>
                 <div class="xf-sidebar-brand-subtitle">XF Business Dashboard</div>
             </div>
+            """
+        ).strip()
+        st.markdown(brand_html, unsafe_allow_html=True)
+        render_user_sidebar()
+        nav_html = dedent(
+            f"""
             {_nav_link_html("🏠 首页", "Home", "./", active=current_title == "首页", home=True)}
             <div class="xf-nav-divider"></div>
             {groups_html}
             """
         ).strip()
         st.markdown(nav_html, unsafe_allow_html=True)
+        render_logout_button()
 
 
 render_sidebar_navigation()

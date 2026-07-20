@@ -2,6 +2,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from app.auth import require_login
 from app.data import monthly_sales, top_entity_table, top_table
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.ui import bar_chart, inject_global_styles, line_chart, money, percent, metric_row, section_header, show_code_warning, show_context_summary, show_filters, style_plotly
@@ -77,6 +78,7 @@ def _group_trend_chart(trend, selected_groups):
 
 st.set_page_config(page_title="产品分析", layout="wide")
 inject_global_styles()
+require_login("product_analysis")
 st.title("产品分析")
 st.caption("查看产品组、重点产品和购买客户表现")
 

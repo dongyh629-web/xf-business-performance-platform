@@ -1,12 +1,14 @@
 import pandas as pd
 import streamlit as st
 
+from app.auth import require_login
 from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.ui import show_code_warning, show_context_summary, show_filters
 
 
 st.set_page_config(page_title="数据质量中心", layout="wide")
+require_login("data_quality")
 st.title("数据质量中心")
 
 ensure_drive_data_loaded()

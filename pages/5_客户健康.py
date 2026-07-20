@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from app.auth import require_login
 from app import config as app_config
 from app.customer_health import (
     NEW_CUSTOMER_START_DATE,
@@ -209,6 +210,7 @@ def _suggested_action(row: pd.Series) -> str:
 
 st.set_page_config(page_title="客户健康", layout="wide")
 inject_global_styles()
+require_login("customer_health")
 st.title("客户健康")
 st.caption("Customer Health")
 st.caption("哪些客户正在下滑、沉睡或需要销售跟进？")
