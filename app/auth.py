@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
+import hashlib
+import hmac
 from io import BytesIO
+import json
+import secrets
+import time
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app.google_drive import (
     DriveUserError,
@@ -21,6 +28,9 @@ LOGIN_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
+OAUTH_CONTEXT_KEY = "auth_oauth_context"
+OAUTH_COOKIE_NAME = "xf_oauth_context"
+OAUTH_CONTEXT_TTL_SECONDS = 600
 USER_SESSION_KEYS = ["auth_email", "auth_name", "auth_role", "auth_login_status"]
 ROLE_PERMISSIONS = {
     "Admin": {
@@ -117,33 +127,157 @@ def _oauth_client_config() -> dict[str, object]:
     }
 
 
-def _auth_flow():
+def _new_code_verifier() -> str:
+    return secrets.token_urlsafe(64)
+
+
+def _auth_flow(*, redirect_uri: str | None = None, state: str | None = None, code_verifier: str | None = None):
     from google_auth_oauthlib.flow import Flow
 
-    redirect_uri = _current_url_without_auth_params()
-    if not redirect_uri:
+    selected_redirect_uri = redirect_uri or _current_url_without_auth_params()
+    if not selected_redirect_uri:
         raise DriveUserError("无法识别当前登录回调地址。")
-    flow = Flow.from_client_config(_oauth_client_config(), scopes=LOGIN_SCOPES, redirect_uri=redirect_uri)
+    kwargs = {
+        "scopes": LOGIN_SCOPES,
+        "redirect_uri": selected_redirect_uri,
+        "autogenerate_code_verifier": code_verifier is None,
+    }
+    if state:
+        kwargs["state"] = state
+    if code_verifier:
+        kwargs["code_verifier"] = code_verifier
+    flow = Flow.from_client_config(_oauth_client_config(), **kwargs)
     return flow
 
 
+def _oauth_cookie_secret() -> bytes:
+    oauth = _plain_secret_section("google_oauth")
+    client_secret = str(oauth.get("client_secret", "")).strip()
+    if not client_secret:
+        raise DriveUserError("Google OAuth Secrets 缺少 client_secret。")
+    return client_secret.encode("utf-8")
+
+
+def _encode_oauth_context(context: dict[str, str]) -> str:
+    payload = dict(context)
+    payload["created_at"] = str(int(time.time()))
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    signature = hmac.new(_oauth_cookie_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{body}.{signature}"
+
+
+def _decode_oauth_context(value: str) -> dict[str, str] | None:
+    try:
+        body, signature = value.split(".", 1)
+    except ValueError:
+        return None
+    expected = hmac.new(_oauth_cookie_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    padded = body + "=" * (-len(body) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    try:
+        created_at = int(payload.get("created_at", "0"))
+    except (TypeError, ValueError):
+        return None
+    if int(time.time()) - created_at > OAUTH_CONTEXT_TTL_SECONDS:
+        return None
+    context = {
+        "state": str(payload.get("state", "")).strip(),
+        "code_verifier": str(payload.get("code_verifier", "")).strip(),
+        "redirect_uri": str(payload.get("redirect_uri", "")).strip(),
+    }
+    if not all(context.values()):
+        return None
+    return context
+
+
+def _set_oauth_cookie(context: dict[str, str]) -> None:
+    value = _encode_oauth_context(context)
+    secure = "; Secure" if context["redirect_uri"].startswith("https://") else ""
+    components.html(
+        f"""
+        <script>
+        document.cookie = "{OAUTH_COOKIE_NAME}={value}; Max-Age={OAUTH_CONTEXT_TTL_SECONDS}; Path=/; SameSite=Lax{secure}";
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _context_from_cookie() -> dict[str, str] | None:
+    try:
+        value = st.context.cookies.get(OAUTH_COOKIE_NAME, "")
+    except Exception:
+        return None
+    if not value:
+        return None
+    return _decode_oauth_context(str(value))
+
+
+def _clear_oauth_context() -> None:
+    for key in [OAUTH_CONTEXT_KEY, "auth_oauth_state"]:
+        st.session_state.pop(key, None)
+
+
 def _authorize_url() -> str:
-    flow = _auth_flow()
+    redirect_uri = _current_url_without_auth_params()
+    code_verifier = _new_code_verifier()
+    flow = _auth_flow(redirect_uri=redirect_uri, code_verifier=code_verifier)
     auth_url, state = flow.authorization_url(
         access_type="online",
         include_granted_scopes="true",
         prompt="select_account",
     )
+    st.session_state[OAUTH_CONTEXT_KEY] = {
+        "state": state,
+        "code_verifier": code_verifier,
+        "redirect_uri": redirect_uri,
+    }
+    _set_oauth_cookie(st.session_state[OAUTH_CONTEXT_KEY])
     st.session_state["auth_oauth_state"] = state
     return auth_url
 
 
-def _verify_callback_code(code: str) -> dict[str, object]:
+def _oauth_context() -> dict[str, str]:
+    context = st.session_state.get(OAUTH_CONTEXT_KEY)
+    if not isinstance(context, dict):
+        context = _context_from_cookie()
+        if context:
+            st.session_state[OAUTH_CONTEXT_KEY] = context
+        else:
+            raise PermissionError("登录会话已过期，请重新点击 Continue with Google。")
+    state = str(context.get("state", "")).strip()
+    code_verifier = str(context.get("code_verifier", "")).strip()
+    redirect_uri = str(context.get("redirect_uri", "")).strip()
+    if not state or not code_verifier or not redirect_uri:
+        raise PermissionError("登录会话已过期，请重新点击 Continue with Google。")
+    return {"state": state, "code_verifier": code_verifier, "redirect_uri": redirect_uri}
+
+
+def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
     from google.auth.transport.requests import Request
     from google.oauth2 import id_token
 
-    flow = _auth_flow()
-    flow.fetch_token(code=code)
+    context = _oauth_context()
+    if returned_state != context["state"]:
+        raise PermissionError("登录状态校验失败，请重新点击 Continue with Google。")
+    flow = _auth_flow(
+        redirect_uri=context["redirect_uri"],
+        state=context["state"],
+        code_verifier=context["code_verifier"],
+    )
+    try:
+        flow.fetch_token(code=code)
+    except Exception as exc:
+        message = str(exc)
+        if "Missing code verifier" in message or "invalid_grant" in message:
+            raise PermissionError("登录会话已过期，请重新点击 Continue with Google。") from exc
+        raise
     credentials = flow.credentials
     token = credentials.id_token
     if not token:
@@ -243,7 +377,7 @@ def set_login_session(user: AuthUser) -> None:
 
 
 def logout() -> None:
-    for key in USER_SESSION_KEYS + ["auth_error", "auth_oauth_state"]:
+    for key in USER_SESSION_KEYS + ["auth_error", "auth_oauth_state", OAUTH_CONTEXT_KEY]:
         st.session_state.pop(key, None)
 
 
@@ -260,17 +394,20 @@ def authenticate_google_callback() -> None:
     code = st.query_params.get("code")
     if not code or is_logged_in():
         return
+    state = str(st.query_params.get("state", "")).strip()
     try:
-        info = _verify_callback_code(str(code))
+        info = _verify_callback_code(str(code), state)
         email = _normalize_email(info.get("email"))
         display_name = str(info.get("name") or email).strip()
         user = find_user_record(load_users_table(), email)
         user = AuthUser(email=user.email, name=user.name or display_name or user.email, role=user.role)
         set_login_session(user)
+        _clear_oauth_context()
         st.query_params.clear()
         st.rerun()
     except Exception as exc:
         st.session_state["auth_error"] = str(exc)
+        _clear_oauth_context()
         st.query_params.clear()
         st.rerun()
 
