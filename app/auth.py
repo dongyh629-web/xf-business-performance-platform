@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
-import hashlib
-import hmac
 from io import BytesIO
 import json
+from pathlib import Path
 import secrets
 import time
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from app.google_drive import (
     DriveUserError,
@@ -29,7 +26,7 @@ LOGIN_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
 OAUTH_CONTEXT_KEY = "auth_oauth_context"
-OAUTH_COOKIE_NAME = "xf_oauth_context"
+OAUTH_STATE_CACHE_PATH = Path(".cache") / "oauth_state.json"
 OAUTH_CONTEXT_TTL_SECONDS = 600
 USER_SESSION_KEYS = ["auth_email", "auth_name", "auth_role", "auth_login_status"]
 ROLE_PERMISSIONS = {
@@ -150,73 +147,65 @@ def _auth_flow(*, redirect_uri: str | None = None, state: str | None = None, cod
     return flow
 
 
-def _oauth_cookie_secret() -> bytes:
-    oauth = _plain_secret_section("google_oauth")
-    client_secret = str(oauth.get("client_secret", "")).strip()
-    if not client_secret:
-        raise DriveUserError("Google OAuth Secrets 缺少 client_secret。")
-    return client_secret.encode("utf-8")
-
-
-def _encode_oauth_context(context: dict[str, str]) -> str:
-    payload = dict(context)
-    payload["created_at"] = str(int(time.time()))
-    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-    signature = hmac.new(_oauth_cookie_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()
-    return f"{body}.{signature}"
-
-
-def _decode_oauth_context(value: str) -> dict[str, str] | None:
+def _read_oauth_state_cache() -> dict[str, dict[str, str]]:
     try:
-        body, signature = value.split(".", 1)
-    except ValueError:
-        return None
-    expected = hmac.new(_oauth_cookie_secret(), body.encode("ascii"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        return None
-    padded = body + "=" * (-len(body) % 4)
+        raw = json.loads(OAUTH_STATE_CACHE_PATH.read_text())
+    except FileNotFoundError:
+        return {}
     try:
-        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return {str(key): value for key, value in raw.items() if isinstance(value, dict)}
     except Exception:
-        return None
+        return {}
+
+
+def _write_oauth_state_cache(cache: dict[str, dict[str, str]]) -> None:
+    OAUTH_STATE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = OAUTH_STATE_CACHE_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(cache, separators=(",", ":"), sort_keys=True))
+    temp_path.replace(OAUTH_STATE_CACHE_PATH)
+
+
+def _valid_oauth_context(context: dict[str, str]) -> dict[str, str] | None:
     try:
-        created_at = int(payload.get("created_at", "0"))
+        created_at = int(context.get("created_at", "0"))
     except (TypeError, ValueError):
         return None
     if int(time.time()) - created_at > OAUTH_CONTEXT_TTL_SECONDS:
         return None
-    context = {
-        "state": str(payload.get("state", "")).strip(),
-        "code_verifier": str(payload.get("code_verifier", "")).strip(),
-        "redirect_uri": str(payload.get("redirect_uri", "")).strip(),
+    normalized = {
+        "state": str(context.get("state", "")).strip(),
+        "code_verifier": str(context.get("code_verifier", "")).strip(),
+        "redirect_uri": str(context.get("redirect_uri", "")).strip(),
     }
-    if not all(context.values()):
+    if not all(normalized.values()):
         return None
-    return context
+    return normalized
 
 
-def _set_oauth_cookie(context: dict[str, str]) -> None:
-    value = _encode_oauth_context(context)
-    secure = "; Secure" if context["redirect_uri"].startswith("https://") else ""
-    components.html(
-        f"""
-        <script>
-        document.cookie = "{OAUTH_COOKIE_NAME}={value}; Max-Age={OAUTH_CONTEXT_TTL_SECONDS}; Path=/; SameSite=Lax{secure}";
-        </script>
-        """,
-        height=0,
-    )
+def _store_oauth_context(context: dict[str, str]) -> None:
+    cache = _read_oauth_state_cache()
+    now = int(time.time())
+    cache = {
+        state: stored
+        for state, stored in cache.items()
+        if _valid_oauth_context(stored) is not None
+    }
+    cache[context["state"]] = {**context, "created_at": str(now)}
+    _write_oauth_state_cache(cache)
 
 
-def _context_from_cookie() -> dict[str, str] | None:
-    try:
-        value = st.context.cookies.get(OAUTH_COOKIE_NAME, "")
-    except Exception:
+def _consume_oauth_context(state: str) -> dict[str, str] | None:
+    cache = _read_oauth_state_cache()
+    stored = cache.pop(state, None)
+    cleaned_cache = {
+        stored_state: stored_context
+        for stored_state, stored_context in cache.items()
+        if _valid_oauth_context(stored_context) is not None
+    }
+    _write_oauth_state_cache(cleaned_cache)
+    if stored is None:
         return None
-    if not value:
-        return None
-    return _decode_oauth_context(str(value))
+    return _valid_oauth_context(stored)
 
 
 def _clear_oauth_context() -> None:
@@ -233,24 +222,21 @@ def _authorize_url() -> str:
         include_granted_scopes="true",
         prompt="select_account",
     )
-    st.session_state[OAUTH_CONTEXT_KEY] = {
+    oauth_context = {
         "state": state,
         "code_verifier": code_verifier,
         "redirect_uri": redirect_uri,
     }
-    _set_oauth_cookie(st.session_state[OAUTH_CONTEXT_KEY])
+    _store_oauth_context(oauth_context)
+    st.session_state[OAUTH_CONTEXT_KEY] = oauth_context
     st.session_state["auth_oauth_state"] = state
     return auth_url
 
 
-def _oauth_context() -> dict[str, str]:
-    context = st.session_state.get(OAUTH_CONTEXT_KEY)
-    if not isinstance(context, dict):
-        context = _context_from_cookie()
-        if context:
-            st.session_state[OAUTH_CONTEXT_KEY] = context
-        else:
-            raise PermissionError("登录会话已过期，请重新点击 Continue with Google。")
+def _oauth_context(returned_state: str) -> dict[str, str]:
+    context = _consume_oauth_context(returned_state)
+    if context is None:
+        raise PermissionError("登录会话已过期，请重新点击 Continue with Google。")
     state = str(context.get("state", "")).strip()
     code_verifier = str(context.get("code_verifier", "")).strip()
     redirect_uri = str(context.get("redirect_uri", "")).strip()
@@ -263,7 +249,7 @@ def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
     from google.auth.transport.requests import Request
     from google.oauth2 import id_token
 
-    context = _oauth_context()
+    context = _oauth_context(returned_state)
     if returned_state != context["state"]:
         raise PermissionError("登录状态校验失败，请重新点击 Continue with Google。")
     flow = _auth_flow(
