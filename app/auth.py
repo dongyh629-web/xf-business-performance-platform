@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
@@ -28,7 +30,10 @@ LOGIN_SCOPES = [
 OAUTH_CONTEXT_KEY = "auth_oauth_context"
 OAUTH_STATE_CACHE_PATH = Path(".cache") / "oauth_state.json"
 OAUTH_CONTEXT_TTL_SECONDS = 600
-USER_SESSION_KEYS = ["auth_email", "auth_name", "auth_role", "auth_login_status"]
+APP_SESSION_COOKIE_NAME = "xf_app_session"
+APP_SESSION_STORE_PATH = Path(".cache") / "auth_sessions.json"
+APP_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+USER_SESSION_KEYS = ["auth_email", "auth_name", "auth_role", "auth_login_status", "auth_google_sub", "auth_session_token"]
 ROLE_PERMISSIONS = {
     "Admin": {
         "overview",
@@ -87,6 +92,7 @@ class AuthUser:
     email: str
     name: str
     role: str
+    google_sub: str = ""
 
 
 def _plain_secret_section(name: str) -> dict[str, object]:
@@ -94,6 +100,51 @@ def _plain_secret_section(name: str) -> dict[str, object]:
         return dict(st.secrets.get(name, {}))
     except Exception:
         return {}
+
+
+def _cookie_manager():
+    try:
+        import extra_streamlit_components as stx
+    except Exception:
+        return None
+    if "_xf_cookie_manager" not in st.session_state:
+        st.session_state["_xf_cookie_manager"] = stx.CookieManager(key="xf_cookie_manager")
+    return st.session_state["_xf_cookie_manager"]
+
+
+def _read_cookie(name: str) -> str:
+    manager = _cookie_manager()
+    if manager is None:
+        return ""
+    try:
+        cookies = manager.get_all()
+    except Exception:
+        return ""
+    return str(cookies.get(name, "") or "")
+
+
+def _set_cookie(name: str, value: str, max_age_seconds: int) -> None:
+    manager = _cookie_manager()
+    if manager is None:
+        return
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=max_age_seconds)
+    try:
+        manager.set(name, value, expires_at=expires_at, key=f"set_{name}")
+    except Exception:
+        return
+
+
+def _delete_cookie(name: str) -> None:
+    manager = _cookie_manager()
+    if manager is None:
+        return
+    try:
+        manager.delete(name, key=f"delete_{name}")
+    except Exception:
+        try:
+            manager.set(name, "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key=f"expire_{name}")
+        except Exception:
+            return
 
 
 def _current_url_without_auth_params() -> str:
@@ -206,6 +257,124 @@ def _consume_oauth_context(state: str) -> dict[str, str] | None:
     if stored is None:
         return None
     return _valid_oauth_context(stored)
+
+
+def _read_app_sessions() -> dict[str, dict[str, str]]:
+    try:
+        raw = json.loads(APP_SESSION_STORE_PATH.read_text())
+    except FileNotFoundError:
+        return {}
+    try:
+        return {str(key): value for key, value in raw.items() if isinstance(value, dict)}
+    except Exception:
+        return {}
+
+
+def _write_app_sessions(sessions: dict[str, dict[str, str]]) -> None:
+    APP_SESSION_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = APP_SESSION_STORE_PATH.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(sessions, separators=(",", ":"), sort_keys=True))
+    temp_path.replace(APP_SESSION_STORE_PATH)
+
+
+def _hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _session_expired(record: dict[str, str], now: int | None = None) -> bool:
+    selected_now = now or int(time.time())
+    try:
+        expires_at = int(record.get("expires_at", "0"))
+    except (TypeError, ValueError):
+        return True
+    return expires_at <= selected_now
+
+
+def _clean_app_sessions(sessions: dict[str, dict[str, str]] | None = None) -> dict[str, dict[str, str]]:
+    selected = sessions if sessions is not None else _read_app_sessions()
+    now = int(time.time())
+    return {
+        token_hash: record
+        for token_hash, record in selected.items()
+        if isinstance(record, dict) and not _session_expired(record, now)
+    }
+
+
+def _create_app_session(user: AuthUser) -> str:
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_session_token(token)
+    now = int(time.time())
+    sessions = _clean_app_sessions()
+    sessions[token_hash] = {
+        "token_hash": token_hash,
+        "user_email": user.email,
+        "user_name": user.name,
+        "user_role": user.role,
+        "google_sub": user.google_sub,
+        "created_at": str(now),
+        "expires_at": str(now + APP_SESSION_TTL_SECONDS),
+        "last_seen_at": str(now),
+    }
+    _write_app_sessions(sessions)
+    return token
+
+
+def _delete_app_session(token: str) -> None:
+    if not token:
+        return
+    token_hash = _hash_session_token(token)
+    sessions = _read_app_sessions()
+    if token_hash in sessions:
+        sessions.pop(token_hash, None)
+        _write_app_sessions(_clean_app_sessions(sessions))
+
+
+def _session_record_from_token(token: str) -> dict[str, str] | None:
+    if not token:
+        return None
+    token_hash = _hash_session_token(token)
+    sessions = _clean_app_sessions()
+    record = sessions.get(token_hash)
+    if record is None:
+        if sessions != _read_app_sessions():
+            _write_app_sessions(sessions)
+        return None
+    now = int(time.time())
+    record["last_seen_at"] = str(now)
+    sessions[token_hash] = record
+    _write_app_sessions(sessions)
+    return record
+
+
+def _restore_user_from_app_session() -> AuthUser | None:
+    if current_user() is not None:
+        return current_user()
+    token = _read_cookie(APP_SESSION_COOKIE_NAME)
+    record = _session_record_from_token(token)
+    if record is None:
+        if token:
+            _delete_cookie(APP_SESSION_COOKIE_NAME)
+        return None
+    try:
+        user = find_user_record(load_users_table(), record.get("user_email", ""))
+    except Exception:
+        _delete_app_session(token)
+        _delete_cookie(APP_SESSION_COOKIE_NAME)
+        return None
+    user = AuthUser(email=user.email, name=user.name or record.get("user_name", user.email), role=user.role, google_sub=str(record.get("google_sub", "")))
+    set_login_session(user)
+    st.session_state["auth_session_token"] = token
+    return user
+
+
+def _queue_session_cookie(token: str) -> None:
+    st.session_state["auth_pending_session_cookie"] = token
+
+
+def _write_pending_session_cookie() -> None:
+    token = str(st.session_state.pop("auth_pending_session_cookie", "") or "")
+    if token:
+        _set_cookie(APP_SESSION_COOKIE_NAME, token, APP_SESSION_TTL_SECONDS)
 
 
 def _clear_oauth_context() -> None:
@@ -346,9 +515,10 @@ def current_user() -> AuthUser | None:
     email = st.session_state.get("auth_email")
     name = st.session_state.get("auth_name")
     role = st.session_state.get("auth_role")
+    google_sub = st.session_state.get("auth_google_sub", "")
     if not email or not role:
         return None
-    return AuthUser(email=str(email), name=str(name or email), role=str(role))
+    return AuthUser(email=str(email), name=str(name or email), role=str(role), google_sub=str(google_sub or ""))
 
 
 def is_logged_in() -> bool:
@@ -359,10 +529,14 @@ def set_login_session(user: AuthUser) -> None:
     st.session_state["auth_email"] = user.email
     st.session_state["auth_name"] = user.name
     st.session_state["auth_role"] = normalize_role(user.role)
+    st.session_state["auth_google_sub"] = user.google_sub
     st.session_state["auth_login_status"] = "logged_in"
 
 
 def logout() -> None:
+    token = str(st.session_state.get("auth_session_token", "") or _read_cookie(APP_SESSION_COOKIE_NAME))
+    _delete_app_session(token)
+    _delete_cookie(APP_SESSION_COOKIE_NAME)
     for key in USER_SESSION_KEYS + ["auth_error", "auth_oauth_state", OAUTH_CONTEXT_KEY]:
         st.session_state.pop(key, None)
 
@@ -386,8 +560,11 @@ def authenticate_google_callback() -> None:
         email = _normalize_email(info.get("email"))
         display_name = str(info.get("name") or email).strip()
         user = find_user_record(load_users_table(), email)
-        user = AuthUser(email=user.email, name=user.name or display_name or user.email, role=user.role)
+        user = AuthUser(email=user.email, name=user.name or display_name or user.email, role=user.role, google_sub=str(info.get("sub", "") or ""))
         set_login_session(user)
+        session_token = _create_app_session(user)
+        st.session_state["auth_session_token"] = session_token
+        _queue_session_cookie(session_token)
         _clear_oauth_context()
         st.query_params.clear()
         st.rerun()
@@ -427,10 +604,11 @@ def _render_login_page() -> None:
 
 def require_login(permission_key: str | None = None) -> AuthUser:
     authenticate_google_callback()
-    user = current_user()
+    user = current_user() or _restore_user_from_app_session()
     if user is None:
         _render_login_page()
         st.stop()
+    _write_pending_session_cookie()
     if permission_key:
         require_permission(permission_key)
     return user
