@@ -21,6 +21,69 @@ def percent_or_na(value) -> str:
         return "暂无可比数据"
     return f"{float(value):.1%}"
 
+
+def _order_amount_metrics(data: pd.DataFrame, customer_summary: pd.DataFrame) -> dict[str, object]:
+    if data.empty or "Order No." not in data.columns:
+        return {
+            "median_order_value": None,
+            "trimmed_average_order_value": None,
+            "non_top10_aov": None,
+            "median_customer_aov": None,
+            "order_value_iqr": None,
+        }
+
+    orders = (
+        data.groupby("Order No.", dropna=False)["Sales Amount"]
+        .sum()
+        .dropna()
+        .sort_values()
+    )
+    median_order_value = float(orders.median()) if not orders.empty else None
+    if len(orders) < 20:
+        trimmed_average_order_value = None
+    else:
+        trim_count = int(len(orders) * 0.05)
+        trimmed_orders = orders.iloc[trim_count : len(orders) - trim_count] if trim_count else orders
+        trimmed_average_order_value = float(trimmed_orders.mean()) if not trimmed_orders.empty else None
+    if orders.empty:
+        order_value_iqr = None
+    else:
+        order_value_iqr = (float(orders.quantile(0.25)), float(orders.quantile(0.75)))
+
+    customer_key = "Customer Key" if "Customer Key" in data.columns else "Customer"
+    top10_keys = set(customer_summary.head(10)["Customer Key"].astype(str)) if not customer_summary.empty and "Customer Key" in customer_summary.columns else set()
+    non_top10 = data[~data[customer_key].astype(str).isin(top10_keys)] if top10_keys else data.iloc[0:0]
+    non_top10_orders = int(non_top10["Order No."].nunique()) if not non_top10.empty else 0
+    non_top10_aov = float(non_top10["Sales Amount"].sum() / non_top10_orders) if non_top10_orders else None
+
+    if customer_summary.empty:
+        median_customer_aov = None
+    else:
+        customer_aovs = pd.to_numeric(customer_summary["Average Order Value"], errors="coerce").dropna()
+        median_customer_aov = float(customer_aovs.median()) if not customer_aovs.empty else None
+
+    return {
+        "median_order_value": median_order_value,
+        "trimmed_average_order_value": trimmed_average_order_value,
+        "non_top10_aov": non_top10_aov,
+        "median_customer_aov": median_customer_aov,
+        "order_value_iqr": order_value_iqr,
+    }
+
+
+def _money_or_sample_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "样本不足"
+    return money(float(value))
+
+
+def _iqr_text(value: object) -> str:
+    if value is None:
+        return "样本不足"
+    low, high = value
+    return f"{money(low)} ~ {money(high)}"
+
+
 st.set_page_config(page_title="客户分析", layout="wide")
 inject_global_styles()
 st.title("客户分析")
@@ -48,6 +111,7 @@ total_sales = float(filtered["Sales Amount"].sum())
 order_count = int(filtered["Order No."].nunique())
 avg_order = total_sales / order_count if order_count else 0
 customer_count = int(customer_summary["Customer Key"].nunique()) if not customer_summary.empty else 0
+order_metrics = _order_amount_metrics(filtered, customer_summary)
 
 metric_cards(
     [
@@ -55,7 +119,16 @@ metric_cards(
         ("总订单数", f"{order_count:,}"),
         ("客户数", f"{customer_count:,}"),
         ("平均订单金额", money(avg_order)),
+        ("订单金额中位数", _money_or_sample_text(order_metrics["median_order_value"])),
+    ]
+)
+metric_cards(
+    [
+        ("去极值平均订单金额", _money_or_sample_text(order_metrics["trimmed_average_order_value"])),
+        ("非Top10客户平均订单金额", _money_or_sample_text(order_metrics["non_top10_aov"])),
+        ("典型客户平均订单金额", _money_or_sample_text(order_metrics["median_customer_aov"])),
         ("Top 10 客户贡献率", f"{concentration['Top 10 Contribution']:.1%}"),
+        ("订单金额中间50%区间", _iqr_text(order_metrics["order_value_iqr"])),
     ]
 )
 
