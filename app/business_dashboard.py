@@ -10,7 +10,7 @@ from app.config import DATE_BASIS_LABELS
 from app.customer_health import active_customer_metrics
 from app.date_periods import WeekContext, week_context
 from app.product_range_metrics import RANGE_COLUMN, build_range_overview, safe_ratio
-from app.ui import kpi_grid, section_header
+from app.ui import kpi_grid, safe_page_link, section_header
 
 
 def money(value: float) -> str:
@@ -475,7 +475,7 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
                 st.caption(f"当前使用：{target_source}")
                 st.caption(f"月度目标：{money(monthly_target)}")
                 st.caption(f"年度目标：{money(annual_target)}")
-                st.page_link("pages/4_经营追踪.py", label="前往经营追踪调整目标")
+                safe_page_link("pages/4_经营追踪.py", label="前往销售经营调整目标")
             else:
                 monthly_target = st.number_input(
                     "月度目标",
@@ -493,7 +493,7 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
                     format="%.0f",
                     key="home_annual_target",
                 )
-                st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
+                safe_page_link("pages/4_经营追踪.py", label="前往销售经营设置目标")
             st.caption("年度范围为1月1日至12月31日。")
 
     metrics = cached_business_dashboard_metrics(df, monthly_target, annual_target)
@@ -520,7 +520,7 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
     else:
         st.info(status_message)
         if metrics.monthly_target <= 0:
-            st.page_link("pages/4_经营追踪.py", label="前往经营追踪设置目标")
+            safe_page_link("pages/4_经营追踪.py", label="前往销售经营设置目标")
 
     section_header("销售与目标进度")
     kpi_grid(
@@ -590,4 +590,4 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
     )
 
     _render_weekly_summary(df, metrics)
-    st.page_link("pages/6_产品系列经营追踪.py", label="查看产品系列经营追踪")
+    safe_page_link("pages/6_产品系列经营追踪.py", label="查看产品系列")

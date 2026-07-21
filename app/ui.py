@@ -5,9 +5,21 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from datetime import date
+from pathlib import Path
 
 from app.config import DATE_BASIS_DESCRIPTIONS, DATE_BASIS_LABELS, DATE_BASIS_OPTIONS
 from app.data import apply_date_basis
+
+
+def safe_page_link(page: str, label: str, **kwargs) -> None:
+    """Render a page link only when Streamlit can resolve the target page."""
+    target = Path(page)
+    if not target.exists():
+        return
+    try:
+        st.page_link(page, label=label, **kwargs)
+    except Exception:
+        return
 
 
 STATUS_COLORS = {
