@@ -115,50 +115,49 @@ def inject_global_styles() -> None:
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] {
             display: block !important;
             width: 100% !important;
-            margin: 0.02rem 0;
+            margin: 0 0 0.24rem 0;
         }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] {
-            display: block !important;
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] {
             width: 100% !important;
-            margin: 0.02rem 0;
-        }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] > button {
-            display: flex !important;
-            width: 100% !important;
-            min-height: 36px;
-            padding: 0.26rem 0.72rem 0.26rem 0.62rem;
-            border: 0;
-            border-radius: 7px;
-            background: transparent;
-            color: #1f2937;
-            box-shadow: none;
-            align-items: center;
-            justify-content: space-between !important;
             margin: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details {
+            width: 100% !important;
+            border: 0 !important;
+            background: transparent !important;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary {
+            min-height: 38px !important;
+            padding: 0.24rem 0.52rem 0.24rem 0.5rem !important;
+            border-radius: 7px !important;
+            background: transparent !important;
+            color: #1f2937 !important;
+            line-height: 1.15 !important;
             text-align: left !important;
-            font-size: 15px;
-            font-weight: 600;
-            line-height: 1.15;
-            letter-spacing: 0;
+            justify-content: flex-start !important;
         }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] > button:hover {
-            background: #f3f6fb;
-            color: #111827;
-            border: 0;
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details[open] summary,
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary:hover {
+            background: #f3f6fb !important;
         }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] > button:focus:not(:active) {
-            border: 0;
-            box-shadow: none;
-            color: #111827;
-        }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] > button p {
-            width: 100%;
-            color: #1f2937;
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary p {
+            color: #1f2937 !important;
             font-size: 15px !important;
             font-weight: 600 !important;
             line-height: 1.15 !important;
+            margin: 0 !important;
             text-align: left !important;
-            white-space: nowrap;
+            white-space: nowrap !important;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary svg {
+            color: #8b93a1 !important;
+            margin-left: auto !important;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details > div {
+            padding: 0.1rem 0 0.06rem 0 !important;
         }
         .xf-nav-divider {
             height: 1px;
@@ -301,7 +300,7 @@ def inject_global_styles() -> None:
         section[data-testid="stSidebar"] [data-testid="stPageLink"] {
             display: block !important;
             width: 100% !important;
-            margin: 1px 0 1px 1.18rem !important;
+            margin: 1px 0 1px 1.08rem !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_home_link"] [data-testid="stPageLink"] {
             margin-left: 0 !important;

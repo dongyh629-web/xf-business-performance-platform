@@ -231,27 +231,9 @@ def render_sidebar_navigation() -> None:
         st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         for group in visible_groups:
             group_key = str(group["key"])
-            state_key = f"sidebar_group_{group_key}_open"
             is_current_group = any(item["title"] == current_title for item in group["items"])
-            if state_key not in st.session_state:
-                st.session_state[state_key] = is_current_group
-            elif is_current_group:
-                st.session_state[state_key] = True
-
-            is_open = bool(st.session_state[state_key])
-            arrow = "⌄" if is_open else "›"
             with st.container(key=f"sidebar_group_row_{group_key}"):
-                toggle_clicked = st.button(
-                    f"{group['label']}  {group['english']}  {arrow}",
-                    key=f"sidebar_group_toggle_{group_key}",
-                    use_container_width=True,
-                )
-            if toggle_clicked:
-                st.session_state[state_key] = not is_open
-                st.rerun()
-
-            if st.session_state[state_key]:
-                with st.container():
+                with st.expander(f"{group['label']}  {group['english']}", expanded=is_current_group):
                     for item in group["items"]:
                         safe_page_link(
                             str(item["page"]),
