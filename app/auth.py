@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 from io import BytesIO
 import json
+import logging
 from pathlib import Path
 import secrets
 import time
@@ -22,6 +23,9 @@ from app.google_drive import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 LOGIN_SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -34,6 +38,8 @@ POST_LOGIN_PATH_KEY = "auth_post_login_path"
 APP_SESSION_COOKIE_NAME = "xf_app_session"
 APP_SESSION_STORE_PATH = Path(".cache") / "auth_sessions.json"
 APP_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+COOKIE_HYDRATION_ATTEMPTS_KEY = "auth_cookie_hydration_attempts"
+COOKIE_HYDRATION_MAX_ATTEMPTS = 2
 USER_SESSION_KEYS = ["auth_email", "auth_name", "auth_role", "auth_login_status", "auth_google_sub", "auth_session_token"]
 ROLE_PERMISSIONS = {
     "Admin": {
@@ -123,6 +129,11 @@ def _cookie_manager():
     return st.session_state["_xf_cookie_manager"]
 
 
+def _cookie_secure() -> bool:
+    scheme = urlsplit(st.context.url or "").scheme
+    return scheme == "https"
+
+
 def _read_cookie(name: str) -> str:
     manager = _cookie_manager()
     if manager is None:
@@ -140,7 +151,16 @@ def _set_cookie(name: str, value: str, max_age_seconds: int) -> None:
         return
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=max_age_seconds)
     try:
-        manager.set(name, value, expires_at=expires_at, key=f"set_{name}")
+        manager.set(
+            name,
+            value,
+            path="/",
+            expires_at=expires_at,
+            max_age=max_age_seconds,
+            secure=_cookie_secure(),
+            same_site="lax",
+            key=f"set_{name}",
+        )
     except Exception:
         return
 
@@ -150,12 +170,18 @@ def _delete_cookie(name: str) -> None:
     if manager is None:
         return
     try:
-        manager.delete(name, key=f"delete_{name}")
+        manager.set(
+            name,
+            "",
+            path="/",
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+            max_age=0,
+            secure=_cookie_secure(),
+            same_site="lax",
+            key=f"expire_{name}",
+        )
     except Exception:
-        try:
-            manager.set(name, "", expires_at=datetime.now(timezone.utc) - timedelta(days=1), key=f"expire_{name}")
-        except Exception:
-            return
+        return
 
 
 def _current_url_without_auth_params() -> str:
@@ -183,6 +209,14 @@ def _current_navigation_target() -> str:
     ]
     query = urlencode(query_items)
     return urlunsplit(("", "", parsed.path, query, ""))
+
+
+def _request_path() -> str:
+    current_url = st.context.url
+    if not current_url:
+        return ""
+    parsed = urlsplit(current_url)
+    return urlunsplit(("", "", parsed.path, parsed.query, ""))
 
 
 def _oauth_client_config() -> dict[str, object]:
@@ -379,6 +413,12 @@ def _restore_user_from_app_session() -> AuthUser | None:
         return current_user()
     token = _read_cookie(APP_SESSION_COOKIE_NAME)
     record = _session_record_from_token(token)
+    logger.info(
+        "Auth restore path=%s cookie_present=%s session_record_found=%s",
+        _request_path(),
+        bool(token),
+        record is not None,
+    )
     if record is None:
         if token:
             _delete_cookie(APP_SESSION_COOKIE_NAME)
@@ -395,14 +435,29 @@ def _restore_user_from_app_session() -> AuthUser | None:
     return user
 
 
+def _wait_for_cookie_hydration() -> bool:
+    if _cookie_manager() is None:
+        return False
+    attempts = int(st.session_state.get(COOKIE_HYDRATION_ATTEMPTS_KEY, 0) or 0)
+    if attempts >= COOKIE_HYDRATION_MAX_ATTEMPTS:
+        return False
+    st.session_state[COOKIE_HYDRATION_ATTEMPTS_KEY] = attempts + 1
+    with st.spinner("正在恢复登录状态..."):
+        time.sleep(0.15)
+    st.rerun()
+    return True
+
+
 def _queue_session_cookie(token: str) -> None:
     st.session_state["auth_pending_session_cookie"] = token
 
 
-def _write_pending_session_cookie() -> None:
+def _write_pending_session_cookie() -> bool:
     token = str(st.session_state.pop("auth_pending_session_cookie", "") or "")
     if token:
         _set_cookie(APP_SESSION_COOKIE_NAME, token, APP_SESSION_TTL_SECONDS)
+        return True
+    return False
 
 
 def _clear_oauth_context() -> None:
@@ -643,11 +698,24 @@ def _render_login_page() -> None:
 
 def require_login(permission_key: str | None = None) -> AuthUser:
     authenticate_google_callback()
-    user = current_user() or _restore_user_from_app_session()
+    session_user = current_user()
+    logger.info(
+        "Auth check path=%s permission=%s session_state_has_user=%s",
+        _request_path(),
+        permission_key,
+        session_user is not None,
+    )
+    user = session_user or _restore_user_from_app_session()
     if user is None:
+        logger.info("Auth login page shown path=%s permission=%s", _request_path(), permission_key)
+        _wait_for_cookie_hydration()
         _render_login_page()
         st.stop()
-    _write_pending_session_cookie()
+    st.session_state.pop(COOKIE_HYDRATION_ATTEMPTS_KEY, None)
+    if _write_pending_session_cookie():
+        st.info("正在完成登录状态同步...")
+        st.markdown('<meta http-equiv="refresh" content="1">', unsafe_allow_html=True)
+        st.stop()
     if permission_key:
         require_permission(permission_key)
     return user

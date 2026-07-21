@@ -15,7 +15,7 @@ from app.google_drive import (
     store_target_workbook_in_session,
 )
 from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook, workbook_looks_like_sales_data
-from app.ui import bar_chart, donut_chart, inject_global_styles, line_chart, metric_row, section_header, show_code_warning, show_filters
+from app.ui import bar_chart, donut_chart, inject_global_styles, line_chart, metric_row, safe_page_link, section_header, show_code_warning, show_filters
 
 
 st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout="wide")
@@ -177,8 +177,8 @@ NAV_GROUPS = [
         "label": "📈 销售",
         "english": "Sales",
         "items": [
-            {"title": "销售经营", "english": "Sales Performance", "href": "经营追踪"},
-            {"title": "产品系列", "english": "Product Range", "href": "产品系列经营追踪"},
+            {"title": "销售经营", "english": "Sales Performance", "page": "pages/4_经营追踪.py"},
+            {"title": "产品系列", "english": "Product Range", "page": "pages/6_产品系列经营追踪.py"},
         ],
     },
     {
@@ -187,8 +187,8 @@ NAV_GROUPS = [
         "label": "👥 客户",
         "english": "Customers",
         "items": [
-            {"title": "客户分析", "english": "Customer Analysis", "href": "客户分析"},
-            {"title": "客户健康", "english": "Customer Health", "href": "客户健康"},
+            {"title": "客户分析", "english": "Customer Analysis", "page": "pages/2_客户分析.py"},
+            {"title": "客户健康", "english": "Customer Health", "page": "pages/5_客户健康.py"},
         ],
     },
     {
@@ -197,7 +197,7 @@ NAV_GROUPS = [
         "label": "📦 产品",
         "english": "Products",
         "items": [
-            {"title": "产品分析", "english": "Product Analysis", "href": "产品分析"},
+            {"title": "产品分析", "english": "Product Analysis", "page": "pages/3_产品分析.py"},
         ],
     },
     {
@@ -206,57 +206,10 @@ NAV_GROUPS = [
         "label": "⚙️ 系统",
         "english": "System",
         "items": [
-            {"title": "数据质量", "english": "Data Quality", "href": "数据质量中心"},
+            {"title": "数据质量", "english": "Data Quality", "page": "pages/1_数据质量中心.py"},
         ],
     },
 ]
-
-
-def _nav_link_html(title: str, english: str, href: str, active: bool = False, home: bool = False) -> str:
-    classes = "xf-nav-link"
-    if active:
-        classes += " active"
-    if home:
-        classes += " home"
-    return dedent(
-        f"""
-        <a class="{classes}" href="{escape(href, quote=True)}" target="_self">
-            <span class="xf-nav-link-title">{escape(title)}</span>
-            <span class="xf-nav-link-subtitle">{escape(english)}</span>
-        </a>
-        """
-    ).strip()
-
-
-def _nav_group_html(group: dict[str, object], current_title: str) -> str:
-    is_current_group = any(item["title"] == current_title for item in group["items"])
-    open_attr = " open" if is_current_group or current_title == "首页" else ""
-    children = "\n".join(
-        _nav_link_html(
-            str(item["title"]),
-            str(item["english"]),
-            str(item["href"]),
-            active=current_title == item["title"],
-        )
-        for item in group["items"]
-    )
-    return dedent(
-        f"""
-        <details class="xf-nav-group-details"{open_attr}>
-            <summary class="xf-nav-toggle">
-                <span class="xf-nav-toggle-text">
-                    <span class="xf-nav-toggle-label">{escape(str(group["label"]))}</span>
-                    <span class="xf-nav-toggle-subtitle">{escape(str(group["english"]))}</span>
-                </span>
-                <span class="xf-nav-chevron" aria-hidden="true"></span>
-            </summary>
-            <div class="xf-nav-children">
-                {children}
-            </div>
-        </details>
-        <div class="xf-nav-divider"></div>
-        """
-    ).strip()
 
 
 def render_sidebar_navigation() -> None:
@@ -264,7 +217,6 @@ def render_sidebar_navigation() -> None:
     visible_groups = [group for group in NAV_GROUPS if role_allows(auth_user.role, str(group["area"]))]
 
     with st.sidebar:
-        groups_html = "\n".join(_nav_group_html(group, current_title) for group in visible_groups)
         brand_html = dedent(
             """
             <div class="xf-sidebar-brand">
@@ -275,14 +227,24 @@ def render_sidebar_navigation() -> None:
         ).strip()
         st.markdown(brand_html, unsafe_allow_html=True)
         render_user_sidebar()
-        nav_html = dedent(
-            f"""
-            {_nav_link_html("🏠 首页", "Home", "./", active=current_title == "首页", home=True)}
-            <div class="xf-nav-divider"></div>
-            {groups_html}
-            """
-        ).strip()
-        st.markdown(nav_html, unsafe_allow_html=True)
+        safe_page_link("app.py", label="首页 Home", icon="🏠")
+        st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
+        for group in visible_groups:
+            st.markdown(
+                f"""
+                <div class="xf-native-nav-group">
+                    <span class="xf-native-nav-label">{escape(str(group["label"]))}</span>
+                    <span class="xf-native-nav-subtitle">{escape(str(group["english"]))}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            for item in group["items"]:
+                safe_page_link(
+                    str(item["page"]),
+                    label=f"{item['title']} · {item['english']}",
+                )
+            st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         render_logout_button()
 
 

@@ -93,6 +93,22 @@ def inject_global_styles() -> None:
             line-height: 1.2;
             margin: 0.85rem 0 0.22rem 0;
         }
+        .xf-native-nav-group {
+            display: flex;
+            align-items: baseline;
+            gap: 5px;
+            color: #1f2937;
+            font-size: 17px;
+            font-weight: 600;
+            line-height: 1.2;
+            margin: 0.56rem 0 0.18rem 0;
+            padding-left: 0.08rem;
+        }
+        .xf-native-nav-subtitle {
+            color: #8b93a1;
+            font-size: 13px;
+            font-weight: 500;
+        }
         .xf-nav-divider {
             height: 1px;
             background: #e5e7eb;
