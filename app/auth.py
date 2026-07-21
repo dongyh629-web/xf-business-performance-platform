@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import secrets
 import time
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pandas as pd
 import streamlit as st
@@ -30,6 +30,7 @@ LOGIN_SCOPES = [
 OAUTH_CONTEXT_KEY = "auth_oauth_context"
 OAUTH_STATE_CACHE_PATH = Path(".cache") / "oauth_state.json"
 OAUTH_CONTEXT_TTL_SECONDS = 600
+POST_LOGIN_PATH_KEY = "auth_post_login_path"
 APP_SESSION_COOKIE_NAME = "xf_app_session"
 APP_SESSION_STORE_PATH = Path(".cache") / "auth_sessions.json"
 APP_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -168,6 +169,22 @@ def _current_url_without_auth_params() -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
+def _current_navigation_target() -> str:
+    current_url = st.context.url
+    if not current_url:
+        return ""
+    parsed = urlsplit(current_url)
+    if parsed.path in {"", "/"}:
+        return ""
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key not in {"code", "state", "scope", "authuser", "prompt"}
+    ]
+    query = urlencode(query_items)
+    return urlunsplit(("", "", parsed.path, query, ""))
+
+
 def _oauth_client_config() -> dict[str, object]:
     oauth = _plain_secret_section("google_oauth")
     client_id = str(oauth.get("client_id", "")).strip()
@@ -237,8 +254,9 @@ def _valid_oauth_context(context: dict[str, str]) -> dict[str, str] | None:
         "state": str(context.get("state", "")).strip(),
         "code_verifier": str(context.get("code_verifier", "")).strip(),
         "redirect_uri": str(context.get("redirect_uri", "")).strip(),
+        "return_to": str(context.get("return_to", "")).strip(),
     }
-    if not all(normalized.values()):
+    if not all(normalized[key] for key in ["state", "code_verifier", "redirect_uri"]):
         return None
     return normalized
 
@@ -405,6 +423,7 @@ def _authorize_url() -> str:
         "state": state,
         "code_verifier": code_verifier,
         "redirect_uri": redirect_uri,
+        "return_to": _current_navigation_target(),
     }
     _store_oauth_context(oauth_context)
     st.session_state[OAUTH_CONTEXT_KEY] = oauth_context
@@ -421,7 +440,12 @@ def _oauth_context(returned_state: str) -> dict[str, str]:
     redirect_uri = str(context.get("redirect_uri", "")).strip()
     if not state or not code_verifier or not redirect_uri:
         raise PermissionError("登录会话已过期，请重新点击 Continue with Google。")
-    return {"state": state, "code_verifier": code_verifier, "redirect_uri": redirect_uri}
+    return {
+        "state": state,
+        "code_verifier": code_verifier,
+        "redirect_uri": redirect_uri,
+        "return_to": str(context.get("return_to", "")).strip(),
+    }
 
 
 def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
@@ -448,7 +472,9 @@ def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
     if not token:
         raise PermissionError("Google login did not return an identity token.")
     audience = _oauth_client_config()["web"]["client_id"]
-    return id_token.verify_oauth2_token(token, Request(), audience)
+    verified = id_token.verify_oauth2_token(token, Request(), audience)
+    verified["_return_to"] = context.get("return_to", "")
+    return verified
 
 
 def _normalize_email(value: object) -> str:
@@ -574,6 +600,9 @@ def authenticate_google_callback() -> None:
         set_login_session(user)
         session_token = _create_app_session(user)
         st.session_state["auth_session_token"] = session_token
+        return_to = str(info.get("_return_to", "") or "").strip()
+        if return_to:
+            st.session_state[POST_LOGIN_PATH_KEY] = return_to
         _queue_session_cookie(session_token)
         _clear_oauth_context()
         st.query_params.clear()
@@ -622,6 +651,21 @@ def require_login(permission_key: str | None = None) -> AuthUser:
     if permission_key:
         require_permission(permission_key)
     return user
+
+
+def redirect_to_post_login_page() -> None:
+    target = str(st.session_state.pop(POST_LOGIN_PATH_KEY, "") or "").strip()
+    if not target or not target.startswith("/") or target.startswith("//"):
+        return
+    current_path = urlsplit(st.context.url or "").path or "/"
+    if current_path == target:
+        return
+    safe_target = target.replace('"', "%22").replace("<", "%3C").replace(">", "%3E")
+    st.markdown(
+        f'<meta http-equiv="refresh" content="0; url={safe_target}">',
+        unsafe_allow_html=True,
+    )
+    st.stop()
 
 
 def render_user_sidebar() -> None:

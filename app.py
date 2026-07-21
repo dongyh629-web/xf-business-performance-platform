@@ -4,7 +4,7 @@ from textwrap import dedent
 
 import streamlit as st
 
-from app.auth import local_preview_login, render_logout_button, render_user_sidebar, require_login, role_allows
+from app.auth import local_preview_login, redirect_to_post_login_page, render_logout_button, render_user_sidebar, require_login, role_allows
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, monthly_sales, top_entity_table, top_table
 from app.google_drive import (
@@ -25,6 +25,7 @@ if st.query_params.get("auth_preview"):
     local_preview_login(str(st.query_params.get("auth_preview")))
 
 auth_user = require_login("overview")
+redirect_to_post_login_page()
 
 def render_home_page() -> None:
     st.title("首页概况")
