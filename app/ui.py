@@ -112,12 +112,20 @@ def inject_global_styles() -> None:
         section[data-testid="stSidebar"] div[data-testid="stButton"] {
             margin: 0.04rem 0;
         }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] {
+            margin: 0.02rem 0;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] div[data-testid="stHorizontalBlock"] {
+            gap: 0.18rem;
+            align-items: center;
+        }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] {
             margin: 0.02rem 0;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] > button {
+            width: 100%;
             min-height: 36px;
-            padding: 0.28rem 0.42rem;
+            padding: 0.26rem 0.36rem;
             border: 0;
             border-radius: 7px;
             background: transparent;
@@ -148,6 +156,17 @@ def inject_global_styles() -> None:
             line-height: 1.15 !important;
             text-align: left;
             white-space: nowrap;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"][class*="_arrow"] div[data-testid="stButton"] > button {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            color: #8b93a1;
+        }
+        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"][class*="_arrow"] div[data-testid="stButton"] > button p {
+            color: #8b93a1;
+            font-size: 16px !important;
+            font-weight: 400 !important;
+            text-align: right;
         }
         .xf-nav-divider {
             height: 1px;
@@ -288,19 +307,24 @@ def inject_global_styles() -> None:
             margin-top: 2px;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] {
-            margin: 1px 0 1px 1.56rem !important;
+            display: block !important;
+            width: 100% !important;
+            margin: 1px 0 1px 1.18rem !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_home_link"] [data-testid="stPageLink"] {
             margin-left: 0 !important;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] a {
+            width: 100% !important;
             min-height: 31px !important;
-            padding: 0.2rem 0.48rem !important;
+            padding: 0.2rem 0.44rem !important;
             border-radius: 7px !important;
             font-size: 14px !important;
             font-weight: 400 !important;
             line-height: 1.25 !important;
             border-left: 3px solid transparent !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {
             background: #e8eef9 !important;
@@ -315,6 +339,7 @@ def inject_global_styles() -> None:
             font-weight: inherit !important;
             line-height: 1.25 !important;
             margin: 0 !important;
+            text-align: left !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_home_link"] [data-testid="stPageLink"] a {
             min-height: 34px !important;
