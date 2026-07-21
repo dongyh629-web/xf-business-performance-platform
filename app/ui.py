@@ -36,17 +36,52 @@ def inject_global_styles() -> None:
     st.markdown(
         """
         <style>
-        .block-container {max-width: 1240px; padding-top: 1.4rem; padding-bottom: 3rem;}
+        :root {
+            --xf-brand-primary: #FFC72C;
+            --xf-brand-soft: #FFF7D6;
+            --xf-brand-soft-hover: #FFF1B8;
+            --xf-bg-page: #F7F8FA;
+            --xf-bg-sidebar: #F3F4F6;
+            --xf-bg-card: #FFFFFF;
+            --xf-bg-hover: #F5F6F8;
+            --xf-bg-active: #FFF8E1;
+            --xf-text-primary: #202124;
+            --xf-text-secondary: #5F6368;
+            --xf-text-muted: #9AA0A6;
+            --xf-border: #E5E7EB;
+            --xf-border-strong: #D6D9DE;
+            --xf-success: #2E8B57;
+            --xf-warning: #C98500;
+            --xf-error: #C23B3B;
+            --xf-radius-sm: 6px;
+            --xf-radius-md: 10px;
+            --xf-radius-lg: 12px;
+            --xf-shadow-card: 0 1px 2px rgba(0,0,0,0.04);
+            --xf-space-1: 4px;
+            --xf-space-2: 8px;
+            --xf-space-3: 12px;
+            --xf-space-4: 16px;
+            --xf-space-5: 24px;
+            --xf-space-6: 32px;
+        }
+        .stApp {
+            background: var(--xf-bg-page);
+            color: var(--xf-text-primary);
+        }
+        .block-container {max-width: 1240px; padding-top: 1.15rem; padding-bottom: 3rem;}
         section[data-testid="stSidebar"][aria-expanded="true"] {
-            width: 255px !important;
-            min-width: 255px !important;
+            width: 242px !important;
+            min-width: 242px !important;
         }
         section[data-testid="stSidebar"][aria-expanded="true"] > div {
-            width: 255px !important;
-            min-width: 255px !important;
+            width: 242px !important;
+            min-width: 242px !important;
+        }
+        section[data-testid="stSidebar"] {
+            background: var(--xf-bg-sidebar);
         }
         section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-            padding-top: 1rem;
+            padding: 0.9rem 0.95rem 1.1rem 0.95rem;
         }
         [data-testid="collapsedControl"],
         [data-testid="stSidebarCollapsedControl"],
@@ -60,31 +95,79 @@ def inject_global_styles() -> None:
             display: inline-flex !important;
             visibility: visible !important;
             opacity: 1 !important;
-            color: #4b5563 !important;
-            background: #ffffff !important;
-            border: 1px solid #d1d5db !important;
-            border-radius: 6px !important;
+            color: var(--xf-text-secondary) !important;
+            background: var(--xf-bg-card) !important;
+            border: 1px solid var(--xf-border-strong) !important;
+            border-radius: var(--xf-radius-sm) !important;
             z-index: 20;
         }
         section[data-testid="stSidebar"] button[kind="headerNoPadding"] [data-testid="stIconMaterial"] {
-            color: #4b5563 !important;
+            color: var(--xf-text-secondary) !important;
             font-size: 20px !important;
         }
         .xf-sidebar-brand {
-            margin: 0.08rem 0 0.48rem 0;
+            margin: 0.04rem 0 var(--xf-space-3) 0;
         }
         .xf-sidebar-brand-title {
-            color: #111827;
-            font-size: 23px;
+            color: var(--xf-text-primary);
+            font-size: 27px;
             font-weight: 700;
             line-height: 1.15;
             white-space: nowrap;
+            letter-spacing: 0;
         }
         .xf-sidebar-brand-subtitle {
-            color: #8a94a6;
+            color: var(--xf-text-secondary);
             font-size: 12.5px;
             line-height: 1.2;
-            margin-top: 4px;
+            margin-top: var(--xf-space-1);
+        }
+        .xf-sidebar-brand-line {
+            width: 34px;
+            height: 3px;
+            border-radius: 999px;
+            background: var(--xf-brand-primary);
+            margin-top: var(--xf-space-2);
+        }
+        .xf-sidebar-user {
+            display: flex;
+            align-items: center;
+            gap: var(--xf-space-3);
+            min-height: 50px;
+            padding: var(--xf-space-2) 0 var(--xf-space-3) 0;
+            border-bottom: 1px solid var(--xf-border);
+            margin-bottom: var(--xf-space-2);
+        }
+        .xf-sidebar-avatar {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 999px;
+            background: var(--xf-brand-soft);
+            border: 1px solid var(--xf-brand-soft-hover);
+            color: var(--xf-text-primary);
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .xf-sidebar-user-text {
+            min-width: 0;
+        }
+        .xf-sidebar-user-name {
+            color: var(--xf-text-primary);
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1.2;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .xf-sidebar-user-role {
+            color: var(--xf-text-secondary);
+            font-size: 12px;
+            line-height: 1.25;
+            margin-top: 2px;
         }
         .xf-nav-group {
             color: #6b7280;
@@ -115,7 +198,7 @@ def inject_global_styles() -> None:
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] {
             display: block !important;
             width: 100% !important;
-            margin: 0 0 0.24rem 0;
+            margin: 0 0 0.26rem 0;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] {
             width: 100% !important;
@@ -130,22 +213,22 @@ def inject_global_styles() -> None:
             background: transparent !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary {
-            min-height: 38px !important;
-            padding: 0.24rem 0.52rem 0.24rem 0.5rem !important;
-            border-radius: 7px !important;
+            min-height: 36px !important;
+            padding: 0.22rem 0.5rem !important;
+            border-radius: var(--xf-radius-sm) !important;
             background: transparent !important;
-            color: #1f2937 !important;
+            color: var(--xf-text-primary) !important;
             line-height: 1.15 !important;
             text-align: left !important;
             justify-content: flex-start !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details[open] summary,
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary:hover {
-            background: #f3f6fb !important;
+            background: var(--xf-bg-hover) !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary p {
-            color: #1f2937 !important;
-            font-size: 15px !important;
+            color: var(--xf-text-primary) !important;
+            font-size: 14.5px !important;
             font-weight: 600 !important;
             line-height: 1.15 !important;
             margin: 0 !important;
@@ -153,7 +236,7 @@ def inject_global_styles() -> None:
             white-space: nowrap !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details summary svg {
-            color: #8b93a1 !important;
+            color: var(--xf-text-muted) !important;
             margin-left: auto !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] [data-testid="stExpander"] details > div {
@@ -161,11 +244,11 @@ def inject_global_styles() -> None:
         }
         .xf-nav-divider {
             height: 1px;
-            background: #e5e7eb;
-            margin: 0.42rem 0 0.36rem 0;
+            background: var(--xf-border);
+            margin: var(--xf-space-2) 0 var(--xf-space-2) 0;
         }
         .xf-nav-group-gap {
-            height: 7px;
+            height: 5px;
         }
         section[data-testid="stSidebar"] summary::marker {
             content: "";
@@ -243,21 +326,26 @@ def inject_global_styles() -> None:
             color: #64748b;
         }
         section[data-testid="stSidebar"] button[kind="tertiary"] {
-            color: #1f2937 !important;
-            font-size: 17px !important;
-            font-weight: 600 !important;
+            color: var(--xf-text-primary) !important;
+            font-size: 14px !important;
+            font-weight: 500 !important;
             line-height: 1.25 !important;
-            min-height: 34px !important;
-            padding: 0.2rem 0.2rem !important;
-            margin: 0 !important;
+            min-height: 36px !important;
+            padding: 0.24rem 0.5rem !important;
+            margin: 0.7rem 0 0.35rem 0 !important;
             justify-content: flex-start !important;
-            background: transparent !important;
-            border: 0 !important;
+            background: var(--xf-bg-card) !important;
+            border: 1px solid var(--xf-border-strong) !important;
+            border-radius: var(--xf-radius-sm) !important;
         }
         section[data-testid="stSidebar"] button[kind="tertiary"] p {
-            font-size: 17px !important;
-            font-weight: 600 !important;
+            font-size: 14px !important;
+            font-weight: 500 !important;
             line-height: 1.25 !important;
+        }
+        section[data-testid="stSidebar"] button[kind="tertiary"]:hover {
+            background: var(--xf-brand-soft) !important;
+            border-color: var(--xf-brand-soft-hover) !important;
         }
         .xf-nav-children {
             margin: 0.18rem 0 0.28rem 1.12rem;
@@ -307,10 +395,10 @@ def inject_global_styles() -> None:
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] a {
             width: 100% !important;
-            min-height: 31px !important;
-            padding: 0.2rem 0.44rem !important;
-            border-radius: 7px !important;
-            font-size: 14px !important;
+            min-height: 34px !important;
+            padding: 0.22rem 0.46rem !important;
+            border-radius: var(--xf-radius-sm) !important;
+            font-size: 13.5px !important;
             font-weight: 400 !important;
             line-height: 1.25 !important;
             border-left: 3px solid transparent !important;
@@ -318,28 +406,30 @@ def inject_global_styles() -> None:
             text-align: left !important;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {
-            background: #e8eef9 !important;
+            background: var(--xf-bg-active) !important;
             font-weight: 500 !important;
-            border-left-color: #6f8fc8 !important;
+            border-left-color: var(--xf-brand-primary) !important;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {
-            background: #f3f6fb !important;
+            background: var(--xf-bg-hover) !important;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] p {
-            font-size: 14px !important;
+            font-size: 13.5px !important;
             font-weight: inherit !important;
             line-height: 1.25 !important;
             margin: 0 !important;
             text-align: left !important;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_home_link"] [data-testid="stPageLink"] a {
-            min-height: 34px !important;
+            min-height: 36px !important;
             font-weight: 500 !important;
         }
         section[data-testid="stSidebar"] h3 {
-            font-size: 1rem;
-            margin-top: 1rem;
-            margin-bottom: 0.3rem;
+            color: var(--xf-text-primary);
+            font-size: 0.88rem;
+            font-weight: 650;
+            margin-top: 0.8rem;
+            margin-bottom: 0.28rem;
         }
         section[data-testid="stSidebar"] [data-testid="stExpander"] details summary {
             min-height: 34px;
@@ -347,30 +437,281 @@ def inject_global_styles() -> None:
             padding-bottom: 0.25rem;
         }
         section[data-testid="stSidebar"] [data-testid="stExpander"] {
-            margin-bottom: 0.35rem;
+            margin-bottom: 0.28rem;
         }
         section[data-testid="stSidebar"] p {
-            margin-bottom: 0.25rem;
+            color: var(--xf-text-secondary);
+            margin-bottom: 0.22rem;
         }
         div[data-testid="stMetric"] {
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 14px 14px 12px 14px;
-            background: #ffffff;
+            border: 1px solid var(--xf-border);
+            border-top: 2px solid var(--xf-brand-primary);
+            border-radius: var(--xf-radius-md);
+            padding: 16px 16px 14px 16px;
+            background: var(--xf-bg-card);
+            box-shadow: var(--xf-shadow-card);
             min-height: 112px;
         }
-        div[data-testid="stMetric"] label {color: #6b7280; font-size: 0.82rem;}
-        div[data-testid="stMetricValue"] {font-size: 1.55rem;}
-        div[data-testid="stDataFrame"] {border: 1px solid #e5e7eb; border-radius: 8px;}
-        .xf-section {margin-top: 1.6rem; margin-bottom: 0.6rem;}
-        .xf-section h3 {font-size: 1.05rem; margin-bottom: 0.15rem;}
-        .xf-section p {color: #6b7280; margin-top: 0;}
+        div[data-testid="stMetric"] label {color: var(--xf-text-secondary); font-size: 0.82rem; font-weight: 500;}
+        div[data-testid="stMetricValue"] {color: var(--xf-text-primary); font-size: 1.62rem; font-weight: 700;}
+        div[data-testid="stDataFrame"] {border: 1px solid var(--xf-border); border-radius: var(--xf-radius-md);}
+        div[data-testid="stPlotlyChart"] {
+            background: var(--xf-bg-card);
+            border: 1px solid var(--xf-border);
+            border-radius: var(--xf-radius-md);
+            box-shadow: var(--xf-shadow-card);
+            padding: var(--xf-space-3);
+        }
+        div[data-testid="stAlert"] {
+            border-radius: var(--xf-radius-md);
+        }
+        .xf-page-title {
+            margin: 0 0 var(--xf-space-4) 0;
+        }
+        .xf-page-title h1 {
+            color: var(--xf-text-primary);
+            font-size: 27px;
+            font-weight: 700;
+            line-height: 1.15;
+            margin: 0;
+            letter-spacing: 0;
+        }
+        .xf-page-title p {
+            color: var(--xf-text-secondary);
+            font-size: 13px;
+            line-height: 1.35;
+            margin: var(--xf-space-1) 0 0 0;
+        }
+        .xf-dashboard-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            gap: var(--xf-space-5);
+            padding: var(--xf-space-4) 0 var(--xf-space-3) 0;
+            margin-bottom: var(--xf-space-3);
+            border-bottom: 1px solid var(--xf-border);
+        }
+        .xf-dashboard-title {
+            width: 100%;
+        }
+        .xf-dashboard-title h1 {
+            color: var(--xf-text-primary);
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.12;
+            margin: 0;
+            letter-spacing: 0;
+        }
+        .xf-dashboard-title p {
+            color: var(--xf-text-secondary);
+            font-size: 13px;
+            line-height: 1.35;
+            margin: var(--xf-space-1) 0 0 0;
+        }
+        .xf-dashboard-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--xf-space-2);
+            margin-top: var(--xf-space-3);
+        }
+        .xf-dashboard-meta-item {
+            color: var(--xf-text-secondary);
+            font-size: 12.5px;
+            line-height: 1.2;
+            padding: 5px 8px;
+            border: 1px solid var(--xf-border);
+            border-radius: var(--xf-radius-sm);
+            background: rgba(255,255,255,0.65);
+        }
+        .xf-dashboard-meta-item strong {
+            color: var(--xf-text-primary);
+            font-weight: 600;
+        }
+        .xf-dashboard-meta-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .xf-dashboard-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: var(--xf-success);
+        }
+        .xf-dashboard-meta-status.warning .xf-dashboard-status-dot {
+            background: var(--xf-warning);
+        }
+        .xf-dashboard-scope {
+            color: var(--xf-text-muted);
+            font-size: 12.5px;
+            margin: -4px 0 var(--xf-space-3) 0;
+        }
+        .xf-alert {
+            display: flex;
+            gap: var(--xf-space-3);
+            padding: 12px 14px;
+            margin: var(--xf-space-3) 0 var(--xf-space-5) 0;
+            border: 1px solid var(--xf-border);
+            border-left: 4px solid var(--xf-info-color, #64748b);
+            border-radius: var(--xf-radius-md);
+            background: var(--xf-alert-bg, #ffffff);
+            box-shadow: var(--xf-shadow-card);
+        }
+        .xf-alert.info {--xf-info-color: #64748b; --xf-alert-bg: #f8fafc;}
+        .xf-alert.success {--xf-info-color: var(--xf-success); --xf-alert-bg: #f3faf6;}
+        .xf-alert.warning {--xf-info-color: var(--xf-warning); --xf-alert-bg: #fffaf0;}
+        .xf-alert.error {--xf-info-color: var(--xf-error); --xf-alert-bg: #fff5f5;}
+        .xf-alert-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 24px;
+            width: 22px;
+            height: 22px;
+            border-radius: 999px;
+            color: var(--xf-info-color);
+            border: 1px solid currentColor;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            margin-top: 1px;
+        }
+        .xf-alert-content {
+            min-width: 0;
+        }
+        .xf-alert-title {
+            color: var(--xf-text-primary);
+            font-size: 15px;
+            font-weight: 700;
+            line-height: 1.25;
+            margin: 0 0 4px 0;
+        }
+        .xf-alert-body {
+            color: var(--xf-text-secondary);
+            font-size: 14px;
+            line-height: 1.45;
+            margin: 0;
+        }
+        .xf-executive-kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: var(--xf-space-4);
+            margin: var(--xf-space-3) 0 var(--xf-space-5) 0;
+        }
+        .xf-executive-kpi {
+            position: relative;
+            min-height: 142px;
+            padding: var(--xf-space-4);
+            border: 1px solid var(--xf-border);
+            border-radius: var(--xf-radius-md);
+            background: var(--xf-bg-card);
+            box-shadow: var(--xf-shadow-card);
+            overflow: hidden;
+        }
+        .xf-executive-kpi.featured {
+            border-color: #ead37a;
+            box-shadow: 0 0 0 1px rgba(255,199,44,0.25), var(--xf-shadow-card);
+        }
+        .xf-executive-kpi.featured::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--xf-brand-primary);
+        }
+        .xf-executive-kpi-top {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: var(--xf-space-2);
+            margin-bottom: var(--xf-space-3);
+        }
+        .xf-executive-kpi-label {
+            color: var(--xf-text-secondary);
+            font-size: 12.5px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        .xf-executive-kpi-value {
+            color: var(--xf-text-primary);
+            font-size: 27px;
+            font-weight: 750;
+            line-height: 1.08;
+            margin-bottom: var(--xf-space-2);
+            overflow-wrap: anywhere;
+        }
+        .xf-executive-kpi.featured .xf-executive-kpi-value {
+            font-size: 30px;
+        }
+        .xf-trend {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: var(--xf-text-muted);
+            font-size: 13px;
+            font-weight: 650;
+            line-height: 1.2;
+            margin-bottom: var(--xf-space-2);
+        }
+        .xf-trend.up {color: var(--xf-success);}
+        .xf-trend.down {color: var(--xf-error);}
+        .xf-trend.neutral {color: var(--xf-text-muted);}
+        .xf-executive-kpi-caption {
+            color: var(--xf-text-secondary);
+            font-size: 12.5px;
+            line-height: 1.35;
+        }
+        .xf-summary-card-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: var(--xf-space-4);
+            margin: var(--xf-space-3) 0 var(--xf-space-5) 0;
+        }
+        .xf-summary-card {
+            min-height: 102px;
+            padding: 15px 16px 14px 16px;
+            border: 1px solid var(--xf-border);
+            border-radius: var(--xf-radius-md);
+            background: var(--xf-bg-card);
+            box-shadow: var(--xf-shadow-card);
+        }
+        .xf-summary-card.featured {
+            border-top: 3px solid var(--xf-brand-primary);
+            border-color: #ead37a;
+        }
+        .xf-summary-card-label {
+            color: var(--xf-text-secondary);
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 1.25;
+            margin-bottom: var(--xf-space-2);
+        }
+        .xf-summary-card-value {
+            color: var(--xf-text-primary);
+            font-size: 24px;
+            font-weight: 730;
+            line-height: 1.12;
+            overflow-wrap: anywhere;
+        }
+        .xf-section {margin-top: var(--xf-space-5); margin-bottom: var(--xf-space-3);}
+        .xf-section h3 {
+            color: var(--xf-text-primary);
+            font-size: 1.08rem;
+            font-weight: 600;
+            margin-bottom: 0.12rem;
+        }
+        .xf-section p {color: var(--xf-text-muted); font-size: 12.5px; margin-top: 0;}
         .xf-badge {display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 0.78rem; font-weight: 600;}
         div[data-testid="column"] {min-width: 0;}
         div[data-testid="stDataFrame"] * {overflow-wrap: anywhere;}
         @media (max-width: 1100px) {
             div[data-testid="stMetricValue"] {font-size: 1.25rem;}
             div[data-testid="stMetric"] {min-height: 104px; padding: 12px;}
+            .xf-executive-kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+            .xf-summary-card-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+            .xf-dashboard-header {flex-direction: column; gap: var(--xf-space-3);}
         }
         </style>
         """,
@@ -681,21 +1022,22 @@ def metric_cards(metrics: list[tuple[str, str]]) -> None:
 
 def style_plotly(fig):
     fig.update_layout(
-        font=dict(size=12, color="#374151"),
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        margin=dict(l=12, r=12, t=48, b=18),
-        title=dict(font=dict(size=16, color="#111827")),
-        legend=dict(font=dict(size=11)),
+        font=dict(size=12, color="#5F6368"),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=12, r=12, t=44, b=18),
+        title=dict(font=dict(size=15, color="#202124")),
+        legend=dict(font=dict(size=11), orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        colorway=["#FFC72C", "#AEB6C2", "#374151", "#8B93A1", "#D9A600", "#64748B"],
     )
-    fig.update_xaxes(showgrid=False, zeroline=False, title_font=dict(size=11), tickfont=dict(size=11))
-    fig.update_yaxes(showgrid=False, zeroline=False, title_font=dict(size=11), tickfont=dict(size=11))
+    fig.update_xaxes(showgrid=False, zeroline=False, linecolor="#E5E7EB", title_font=dict(size=11), tickfont=dict(size=11))
+    fig.update_yaxes(showgrid=True, gridcolor="#EEF1F4", zeroline=False, title_font=dict(size=11), tickfont=dict(size=11))
     return fig
 
 
 def line_chart(data: pd.DataFrame, x: str, y: str, title: str):
     fig = px.line(data, x=x, y=y, markers=True, title=title)
-    fig.update_traces(line=dict(color="#2563EB", width=2.5), marker=dict(size=6))
+    fig.update_traces(line=dict(color="#FFC72C", width=2.6), marker=dict(size=6, color="#FFC72C"))
     fig.update_yaxes(tickprefix="£", separatethousands=True)
     fig.update_layout(height=340)
     return style_plotly(fig)
@@ -721,7 +1063,7 @@ def bar_chart(data: pd.DataFrame, x: str, y: str, title: str, orientation: str =
             fig = px.bar(plot_data, x=x, y=y, title=title, orientation=orientation)
     else:
         fig = px.bar(plot_data, x=x, y=y, title=title, orientation=orientation)
-    fig.update_traces(marker_color="#2563EB", hovertemplate="%{y}<br>销售额：£%{x:,.2f}<extra></extra>" if orientation == "h" else None)
+    fig.update_traces(marker_color="#FFC72C", hovertemplate="%{y}<br>销售额：£%{x:,.2f}<extra></extra>" if orientation == "h" else None)
     fig.update_xaxes(tickprefix="£", separatethousands=True, title="销售额" if orientation == "h" else None)
     fig.update_layout(height=max(320, min(560, 26 * len(plot_data) + 120)))
     return style_plotly(fig)

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
+from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -10,7 +11,7 @@ from app.config import DATE_BASIS_LABELS
 from app.customer_health import active_customer_metrics
 from app.date_periods import WeekContext, week_context
 from app.product_range_metrics import RANGE_COLUMN, build_range_overview, safe_ratio
-from app.ui import kpi_grid, safe_page_link, section_header
+from app.ui import safe_page_link, section_header
 
 
 def money(value: float) -> str:
@@ -387,6 +388,170 @@ def _format_delta(value: float | None) -> str | None:
     return _format_percent(value)
 
 
+def _trend_class(value: float | None) -> str:
+    if value is None:
+        return "neutral"
+    if value > 0:
+        return "up"
+    if value < 0:
+        return "down"
+    return "neutral"
+
+
+def _trend_text(value: float | None, label: str = "") -> str:
+    if value is None:
+        return f"{label}无基准" if label else "无基准"
+    arrow = "▲" if value >= 0 else "▼"
+    prefix = f"{label}" if label else ""
+    return f"{prefix}{arrow} {value:+.1%}"
+
+
+def _points_trend_text(value: float | None, label: str = "") -> str:
+    if value is None:
+        return f"{label}无基准" if label else "无基准"
+    arrow = "▲" if value >= 0 else "▼"
+    prefix = f"{label}" if label else ""
+    return f"{prefix}{arrow} {value * 100:+.1f} 点"
+
+
+def _time_text(value: object) -> str:
+    if not value:
+        return "无"
+    text = str(value)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        today = pd.Timestamp.today().date()
+        day_text = "Today" if parsed.date() == today else parsed.strftime("%Y-%m-%d")
+        return f"{day_text} {parsed:%H:%M}"
+    except ValueError:
+        try:
+            parsed = datetime.strptime(text.replace(" UTC", ""), "%Y-%m-%d %H:%M:%S")
+            today = pd.Timestamp.today().date()
+            day_text = "Today" if parsed.date() == today else parsed.strftime("%Y-%m-%d")
+            return f"{day_text} {parsed:%H:%M}"
+        except ValueError:
+            return text
+
+
+def _render_dashboard_header(metrics: BusinessDashboardMetrics, basis_label: str, scope_text: str) -> None:
+    quality = st.session_state.get("quality", {})
+    has_date_warning = bool(quality.get("日期质量警告")) if isinstance(quality, dict) else False
+    status_label = "数据待检查" if has_date_warning else "数据正常"
+    status_class = "warning" if has_date_warning else "success"
+    loaded_at = st.session_state.get("drive_sales_loaded_at") or st.session_state.get("drive_target_loaded_at")
+    sync_text = _time_text(loaded_at)
+    cutoff = metrics.anchor_date.isoformat() if metrics.anchor_date else "无"
+    st.markdown(
+        f"""
+        <div class="xf-dashboard-header">
+            <div class="xf-dashboard-title">
+                <h1>经营概览</h1>
+                <p>Business Overview</p>
+                <div class="xf-dashboard-meta">
+                    <div class="xf-dashboard-meta-item">截至：<strong>{escape(cutoff)}</strong></div>
+                    <div class="xf-dashboard-meta-item">Date Basis：<strong>{escape(basis_label)}</strong></div>
+                    <div class="xf-dashboard-meta-item">最近同步：<strong>{escape(sync_text)}</strong></div>
+                    <div class="xf-dashboard-meta-item xf-dashboard-meta-status {status_class}">
+                        <span class="xf-dashboard-status-dot"></span>
+                        <strong>{escape(status_label)}</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="xf-dashboard-scope">{escape(scope_text)}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_business_alert(title: str, message: str, tone: str = "info") -> None:
+    icon = {"success": "✓", "warning": "!", "error": "!", "info": "i"}.get(tone, "i")
+    st.markdown(
+        f"""
+        <div class="xf-alert {escape(tone)}">
+            <div class="xf-alert-icon">{escape(icon)}</div>
+            <div class="xf-alert-content">
+                <div class="xf-alert-title">{escape(title)}</div>
+                <p class="xf-alert-body">{escape(message)}</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_trend(value: float | None, text: str) -> str:
+    return f'<div class="xf-trend {_trend_class(value)}">{escape(text)}</div>'
+
+
+def _render_executive_kpis(metrics: BusinessDashboardMetrics) -> None:
+    kpis = [
+        {
+            "label": "本周销售额",
+            "value": money(metrics.week_sales),
+            "trend_value": metrics.week_mom,
+            "trend_text": _trend_text(metrics.week_mom, "较上周 "),
+            "caption": _format_date_range(metrics.week.week_start, metrics.week.week_end) if metrics.week else "",
+            "featured": False,
+        },
+        {
+            "label": "本月销售额",
+            "value": money(metrics.monthly_sales),
+            "trend_value": metrics.monthly_yoy,
+            "trend_text": _trend_text(metrics.monthly_yoy, "同比 "),
+            "caption": f"目标：{money(metrics.monthly_target)}",
+            "featured": False,
+        },
+        {
+            "label": "本月目标完成率",
+            "value": _format_percent(metrics.monthly_completion),
+            "trend_value": metrics.pace_gap,
+            "trend_text": _points_trend_text(metrics.pace_gap, "Pace "),
+            "caption": f"剩余目标：{money(metrics.monthly_remaining_target)}",
+            "featured": True,
+        },
+        {
+            "label": "Pace 差值",
+            "value": _format_signed_points(metrics.pace_gap),
+            "trend_value": metrics.pace_gap,
+            "trend_text": f"工作日进度 {_format_percent(metrics.workday_progress)}",
+            "caption": "目标完成率 - 工作日进度",
+            "featured": False,
+        },
+    ]
+    cards = []
+    for item in kpis:
+        featured = " featured" if item["featured"] else ""
+        cards.append(
+            (
+                f'<div class="xf-executive-kpi{featured}">'
+                '<div class="xf-executive-kpi-top">'
+                f'<div class="xf-executive-kpi-label">{escape(str(item["label"]))}</div>'
+                '</div>'
+                f'<div class="xf-executive-kpi-value">{escape(str(item["value"]))}</div>'
+                f'{_render_trend(item["trend_value"], str(item["trend_text"]))}'
+                f'<div class="xf-executive-kpi-caption">{escape(str(item["caption"]))}</div>'
+                '</div>'
+            )
+        )
+    st.markdown(f'<div class="xf-executive-kpi-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
+
+
+def _render_summary_cards(cards: list[dict[str, str | bool]]) -> None:
+    html_cards = []
+    for card in cards:
+        featured = " featured" if card.get("featured") else ""
+        html_cards.append(
+            (
+                f'<div class="xf-summary-card{featured}">'
+                f'<div class="xf-summary-card-label">{escape(str(card["label"]))}</div>'
+                f'<div class="xf-summary-card-value">{escape(str(card["value"]))}</div>'
+                '</div>'
+            )
+        )
+    st.markdown(f'<div class="xf-summary-card-grid">{"".join(html_cards)}</div>', unsafe_allow_html=True)
+
+
 def _format_date_range(start: pd.Timestamp, end: pd.Timestamp) -> str:
     return f"{start.date()} 至 {end.date()}"
 
@@ -504,66 +669,26 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
     basis = df.attrs.get("date_basis", "Completed Date")
     basis_label = DATE_BASIS_LABELS.get(basis, basis)
 
-    st.caption(
-        f"分析截止日期：{metrics.anchor_date} | "
-        f"当前年度：{metrics.year_start.date()} 至 {metrics.year_end.date()} | "
-        f"Date Basis：{basis_label}"
-    )
-    st.caption(_scope_text(df))
+    _render_dashboard_header(metrics, basis_label, _scope_text(df))
 
     status_text, status_level = business_status(metrics)
-    status_message = f"经营状态：{status_text}"
-    if status_level == "success":
-        st.success(status_message)
-    elif status_level == "warning":
-        st.warning(status_message)
-    else:
-        st.info(status_message)
-        if metrics.monthly_target <= 0:
-            safe_page_link("pages/4_经营追踪.py", label="前往销售经营设置目标")
+    _render_business_alert("当前经营状态", f"{status_text}。{generate_business_summary(metrics)}", status_level)
+    if status_level == "info" and metrics.monthly_target <= 0:
+        safe_page_link("pages/4_经营追踪.py", label="前往销售经营设置目标")
 
     section_header("销售与目标进度")
-    kpi_grid(
-        [
-            {
-                "label": "本周销售额",
-                "value": money(metrics.week_sales),
-                "delta": _format_delta(metrics.week_mom),
-                "caption": _format_date_range(metrics.week.week_start, metrics.week.week_end) if metrics.week else "",
-                "help": "当前周按周一至分析截止日，对比上周相同进度。",
-            },
-            {
-                "label": "本月销售额",
-                "value": money(metrics.monthly_sales),
-                "delta": _format_delta(metrics.monthly_yoy),
-                "caption": f"{metrics.month_start.date()} 至 {metrics.anchor_date}",
-                "help": "对比去年同月同日进度。",
-            },
-            {
-                "label": "本月目标完成率",
-                "value": _format_percent(metrics.monthly_completion),
-                "delta": f"目标 {money(metrics.monthly_target)}",
-                "caption": f"剩余 {money(metrics.monthly_remaining_target)}",
-            },
-            {
-                "label": "Pace 差值",
-                "value": _format_signed_points(metrics.pace_gap),
-                "caption": "目标完成率 - 工作日进度",
-                "help": "单位为百分点。",
-            },
-        ],
-        columns=4,
-    )
-
-    st.info(generate_business_summary(metrics))
+    _render_executive_kpis(metrics)
 
     st.divider()
     st.markdown("#### 年度经营")
-    annual_cols = st.columns(4)
-    annual_cols[0].metric("年度累计销售额", money(metrics.annual_sales))
-    annual_cols[1].metric("年度完成率", _format_percent(metrics.annual_completion))
-    annual_cols[2].metric("年度累计同比", _format_percent(metrics.annual_ytd_yoy))
-    annual_cols[3].metric("年度剩余目标", money(metrics.annual_remaining_target))
+    _render_summary_cards(
+        [
+            {"label": "年度累计销售额", "value": money(metrics.annual_sales)},
+            {"label": "年度完成率", "value": _format_percent(metrics.annual_completion), "featured": True},
+            {"label": "年度累计同比", "value": _format_percent(metrics.annual_ytd_yoy)},
+            {"label": "年度剩余目标", "value": money(metrics.annual_remaining_target)},
+        ]
+    )
 
     st.divider()
     st.markdown("#### 行动指标")

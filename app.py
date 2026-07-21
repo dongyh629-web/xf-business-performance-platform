@@ -1,9 +1,10 @@
 from io import BytesIO
+from html import escape
 from textwrap import dedent
 
 import streamlit as st
 
-from app.auth import local_preview_login, redirect_to_post_login_page, render_logout_button, render_user_sidebar, require_login, role_allows
+from app.auth import local_preview_login, redirect_to_post_login_page, render_logout_button, require_login, role_allows
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, monthly_sales, top_entity_table, top_table
 from app.google_drive import (
@@ -27,9 +28,6 @@ auth_user = require_login("overview")
 redirect_to_post_login_page()
 
 def render_home_page() -> None:
-    st.title("首页概况")
-    st.caption("鲜锋经营驾驶舱 · XF Business Dashboard")
-
     drive_status = ensure_drive_data_loaded()
     uploaded, uploaded_target = render_data_source_sidebar(show_uploaders=True)
 
@@ -91,9 +89,6 @@ def render_home_page() -> None:
 
     show_code_warning(filtered)
     quality = st.session_state.get("quality", {})
-    if quality:
-        if quality.get("日期质量警告"):
-            st.warning(str(quality["日期质量警告"]))
 
     render_business_dashboard(filtered)
     st.divider()
@@ -148,7 +143,7 @@ def render_home_page() -> None:
             st.caption("重新上传文件后会生成新旧口径对比。")
 
 
-home_page = st.Page(render_home_page, title="首页", icon="🏠", default=True)
+home_page = st.Page(render_home_page, title="首页", default=True)
 sales_tracking_page = st.Page("pages/4_经营追踪.py", title="销售经营")
 product_range_page = st.Page("pages/6_产品系列经营追踪.py", title="产品系列")
 customer_analysis_page = st.Page("pages/2_客户分析.py", title="客户分析")
@@ -173,7 +168,7 @@ NAV_GROUPS = [
     {
         "key": "sales",
         "area": "sales",
-        "label": "📈 销售",
+        "label": "销售",
         "english": "Sales",
         "items": [
             {"title": "销售经营", "english": "Sales Performance", "page": "pages/4_经营追踪.py"},
@@ -183,7 +178,7 @@ NAV_GROUPS = [
     {
         "key": "customers",
         "area": "customers",
-        "label": "👥 客户",
+        "label": "客户",
         "english": "Customers",
         "items": [
             {"title": "客户分析", "english": "Customer Analysis", "page": "pages/2_客户分析.py"},
@@ -193,7 +188,7 @@ NAV_GROUPS = [
     {
         "key": "products",
         "area": "products",
-        "label": "📦 产品",
+        "label": "产品",
         "english": "Products",
         "items": [
             {"title": "产品分析", "english": "Product Analysis", "page": "pages/3_产品分析.py"},
@@ -202,7 +197,7 @@ NAV_GROUPS = [
     {
         "key": "system",
         "area": "system",
-        "label": "⚙️ 系统",
+        "label": "系统",
         "english": "System",
         "items": [
             {"title": "数据质量", "english": "Data Quality", "page": "pages/1_数据质量中心.py"},
@@ -220,14 +215,29 @@ def render_sidebar_navigation() -> None:
             """
             <div class="xf-sidebar-brand">
                 <div class="xf-sidebar-brand-title">鲜锋经营驾驶舱</div>
-                <div class="xf-sidebar-brand-subtitle">XF Business Dashboard</div>
+                <div class="xf-sidebar-brand-subtitle">XF Business Cockpit</div>
+                <div class="xf-sidebar-brand-line"></div>
             </div>
             """
         ).strip()
         st.markdown(brand_html, unsafe_allow_html=True)
-        render_user_sidebar()
+        user_name = escape(str(auth_user.name or auth_user.email))
+        user_role = escape(str(auth_user.role))
+        user_initial = escape((str(auth_user.name or auth_user.email).strip()[:1] or "U").upper())
+        st.markdown(
+            f"""
+            <div class="xf-sidebar-user">
+                <div class="xf-sidebar-avatar">{user_initial}</div>
+                <div class="xf-sidebar-user-text">
+                    <div class="xf-sidebar-user-name">{user_name}</div>
+                    <div class="xf-sidebar-user-role">{user_role}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         with st.container(key="sidebar_home_link"):
-            st.page_link(home_page, label="首页 · Home", icon="🏠")
+            st.page_link(home_page, label="首页 · Home")
         st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         for group in visible_groups:
             group_key = str(group["key"])
