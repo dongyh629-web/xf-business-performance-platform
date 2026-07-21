@@ -226,7 +226,8 @@ def render_sidebar_navigation() -> None:
         ).strip()
         st.markdown(brand_html, unsafe_allow_html=True)
         render_user_sidebar()
-        safe_page_link("app.py", label="首页 Home", icon="🏠")
+        with st.container(key="sidebar_home_link"):
+            safe_page_link("app.py", label="首页 Home", icon="🏠")
         st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         for group in visible_groups:
             group_key = str(group["key"])
@@ -240,7 +241,7 @@ def render_sidebar_navigation() -> None:
             is_open = bool(st.session_state[state_key])
             arrow = "⌄" if is_open else "›"
             if st.button(
-                f"{group['label']}  {group['english']}  {arrow}",
+                f"{group['label']}  {group['english']}    {arrow}",
                 key=f"sidebar_group_toggle_{group_key}",
                 use_container_width=True,
             ):
@@ -254,7 +255,7 @@ def render_sidebar_navigation() -> None:
                             str(item["page"]),
                             label=f"{item['title']} · {item['english']}",
                         )
-            st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="xf-nav-group-gap"></div>', unsafe_allow_html=True)
         render_logout_button()
 
 
