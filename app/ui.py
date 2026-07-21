@@ -113,26 +113,29 @@ def inject_global_styles() -> None:
             margin: 0.04rem 0;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] {
+            display: block !important;
+            width: 100% !important;
             margin: 0.02rem 0;
         }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_row_"] div[data-testid="stHorizontalBlock"] {
-            gap: 0.18rem;
-            align-items: center;
-        }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] {
+            display: block !important;
+            width: 100% !important;
             margin: 0.02rem 0;
         }
         section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"] div[data-testid="stButton"] > button {
-            width: 100%;
+            display: flex !important;
+            width: 100% !important;
             min-height: 36px;
-            padding: 0.26rem 0.36rem;
+            padding: 0.26rem 0.72rem 0.26rem 0.62rem;
             border: 0;
             border-radius: 7px;
             background: transparent;
             color: #1f2937;
             box-shadow: none;
-            justify-content: flex-start;
-            text-align: left;
+            align-items: center;
+            justify-content: space-between !important;
+            margin: 0 !important;
+            text-align: left !important;
             font-size: 15px;
             font-weight: 600;
             line-height: 1.15;
@@ -154,19 +157,8 @@ def inject_global_styles() -> None:
             font-size: 15px !important;
             font-weight: 600 !important;
             line-height: 1.15 !important;
-            text-align: left;
+            text-align: left !important;
             white-space: nowrap;
-        }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"][class*="_arrow"] div[data-testid="stButton"] > button {
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-            color: #8b93a1;
-        }
-        section[data-testid="stSidebar"] div[class*="st-key-sidebar_group_toggle_"][class*="_arrow"] div[data-testid="stButton"] > button p {
-            color: #8b93a1;
-            font-size: 16px !important;
-            font-weight: 400 !important;
-            text-align: right;
         }
         .xf-nav-divider {
             height: 1px;

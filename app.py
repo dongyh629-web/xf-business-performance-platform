@@ -240,24 +240,12 @@ def render_sidebar_navigation() -> None:
 
             is_open = bool(st.session_state[state_key])
             arrow = "⌄" if is_open else "›"
-            toggle_clicked = False
             with st.container(key=f"sidebar_group_row_{group_key}"):
-                label_col, arrow_col = st.columns([0.86, 0.14], gap="small")
-                with label_col:
-                    toggle_clicked = st.button(
-                        f"{group['label']}  {group['english']}",
-                        key=f"sidebar_group_toggle_{group_key}",
-                        use_container_width=True,
-                    )
-                with arrow_col:
-                    toggle_clicked = (
-                        st.button(
-                            arrow,
-                            key=f"sidebar_group_toggle_{group_key}_arrow",
-                            use_container_width=True,
-                        )
-                        or toggle_clicked
-                    )
+                toggle_clicked = st.button(
+                    f"{group['label']}  {group['english']}  {arrow}",
+                    key=f"sidebar_group_toggle_{group_key}",
+                    use_container_width=True,
+                )
             if toggle_clicked:
                 st.session_state[state_key] = not is_open
                 st.rerun()
