@@ -109,10 +109,37 @@ def inject_global_styles() -> None:
             font-size: 13px;
             font-weight: 500;
         }
+        section[data-testid="stSidebar"] div[data-testid="stButton"] {
+            margin: 0.04rem 0 0.08rem 0;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stButton"] > button {
+            min-height: 38px;
+            padding: 0.34rem 0.52rem;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #1f2937;
+            box-shadow: none;
+            justify-content: flex-start;
+            text-align: left;
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover {
+            background: #f3f6fb;
+            color: #111827;
+            border: 0;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stButton"] > button:focus:not(:active) {
+            border: 0;
+            box-shadow: none;
+            color: #111827;
+        }
         .xf-nav-divider {
             height: 1px;
             background: #e5e7eb;
-            margin: 0.58rem 0;
+            margin: 0.34rem 0;
         }
         section[data-testid="stSidebar"] summary::marker {
             content: "";
@@ -245,12 +272,26 @@ def inject_global_styles() -> None:
             margin-top: 2px;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] {
-            margin: 1px 0 !important;
+            margin: 1px 0 1px 0.92rem !important;
         }
         section[data-testid="stSidebar"] [data-testid="stPageLink"] a {
-            min-height: 30px !important;
-            padding: 0.22rem 0.5rem !important;
-            font-size: 15px !important;
+            min-height: 32px !important;
+            padding: 0.24rem 0.54rem !important;
+            border-radius: 8px !important;
+            font-size: 14px !important;
+            font-weight: 400 !important;
+            line-height: 1.25 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink"] a[aria-current="page"] {
+            background: #e8eef9 !important;
+            font-weight: 500 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink"] a:hover {
+            background: #f3f6fb !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stPageLink"] p {
+            font-size: 14px !important;
+            font-weight: inherit !important;
             line-height: 1.25 !important;
         }
         section[data-testid="stSidebar"] h3 {

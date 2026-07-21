@@ -1,5 +1,4 @@
 from io import BytesIO
-from html import escape
 from textwrap import dedent
 
 import streamlit as st
@@ -230,20 +229,31 @@ def render_sidebar_navigation() -> None:
         safe_page_link("app.py", label="首页 Home", icon="🏠")
         st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         for group in visible_groups:
-            st.markdown(
-                f"""
-                <div class="xf-native-nav-group">
-                    <span class="xf-native-nav-label">{escape(str(group["label"]))}</span>
-                    <span class="xf-native-nav-subtitle">{escape(str(group["english"]))}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            for item in group["items"]:
-                safe_page_link(
-                    str(item["page"]),
-                    label=f"{item['title']} · {item['english']}",
-                )
+            group_key = str(group["key"])
+            state_key = f"sidebar_group_{group_key}_open"
+            is_current_group = any(item["title"] == current_title for item in group["items"])
+            if state_key not in st.session_state:
+                st.session_state[state_key] = is_current_group
+            elif is_current_group:
+                st.session_state[state_key] = True
+
+            is_open = bool(st.session_state[state_key])
+            arrow = "⌄" if is_open else "›"
+            if st.button(
+                f"{group['label']}  {group['english']}  {arrow}",
+                key=f"sidebar_group_toggle_{group_key}",
+                use_container_width=True,
+            ):
+                st.session_state[state_key] = not is_open
+                st.rerun()
+
+            if st.session_state[state_key]:
+                with st.container():
+                    for item in group["items"]:
+                        safe_page_link(
+                            str(item["page"]),
+                            label=f"{item['title']} · {item['english']}",
+                        )
             st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         render_logout_button()
 
