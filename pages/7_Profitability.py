@@ -7,6 +7,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+st.set_page_config(page_title="利润分析", layout="wide")
+
 from app.auth import require_login
 from app.business_metrics import (
     aggregate_customer_profitability,
@@ -618,7 +620,6 @@ def _product_profitability_filters(data: pd.DataFrame) -> pd.DataFrame:
     return filtered_data
 
 
-st.set_page_config(page_title="利润分析", layout="wide")
 inject_global_styles()
 _inject_profitability_styles()
 require_login("margin")

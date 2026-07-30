@@ -5,6 +5,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+st.set_page_config(page_title="客户分析", layout="wide")
+
 from app.auth import require_login
 from app.business_metrics import aggregate_customer_profitability, get_cached_business_metrics, profitability_kpis
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
@@ -179,7 +181,6 @@ def _merge_customer_profitability(customer_summary: pd.DataFrame, metrics_df: pd
     ).drop(columns=["Customer"], errors="ignore")
 
 
-st.set_page_config(page_title="客户分析", layout="wide")
 inject_global_styles()
 require_login("customer_analysis")
 st.title("客户分析")

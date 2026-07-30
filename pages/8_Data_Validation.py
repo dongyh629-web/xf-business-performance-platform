@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
 
+st.set_page_config(page_title="数据验证", layout="wide")
+
 from app.auth import require_login
 from app.business_metrics import get_cached_business_metrics
 from app.data_validation import (
@@ -153,7 +155,6 @@ def _validation_columns(data: pd.DataFrame) -> pd.DataFrame:
     return _format_table(display)
 
 
-st.set_page_config(page_title="数据验证", layout="wide")
 inject_global_styles()
 require_login("data_validation")
 

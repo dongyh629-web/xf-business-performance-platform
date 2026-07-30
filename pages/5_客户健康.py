@@ -3,6 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+st.set_page_config(page_title="客户健康", layout="wide")
+
 from app.auth import require_login
 from app import config as app_config
 from app.customer_health import (
@@ -208,7 +210,6 @@ def _suggested_action(row: pd.Series) -> str:
     return "暂不处理"
 
 
-st.set_page_config(page_title="客户健康", layout="wide")
 inject_global_styles()
 require_login("customer_health")
 st.title("客户健康")

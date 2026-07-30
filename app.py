@@ -4,6 +4,8 @@ from textwrap import dedent
 
 import streamlit as st
 
+st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout="wide")
+
 from app.auth import local_preview_login, redirect_to_post_login_page, render_logout_button, require_login, role_allows
 from app.business_dashboard import render_business_dashboard
 from app.data import import_excel, monthly_sales, top_entity_table, top_table
@@ -18,8 +20,6 @@ from app.google_transport import stage_timer
 from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook, workbook_looks_like_sales_data
 from app.ui import bar_chart, donut_chart, inject_global_styles, line_chart, metric_row, safe_page_link, section_header, show_code_warning, show_filters
 
-
-st.set_page_config(page_title="XF Business Dashboard", page_icon="📊", layout="wide")
 inject_global_styles()
 
 if st.query_params.get("auth_preview"):

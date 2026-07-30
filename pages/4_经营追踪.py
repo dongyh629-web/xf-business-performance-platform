@@ -10,6 +10,8 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+st.set_page_config(page_title="经营追踪", layout="wide")
+
 from app.auth import require_login
 from app.config import DATE_BASIS_LABELS
 from app.google_drive import MANUAL_SOURCE_LABEL, ensure_drive_data_loaded, render_data_source_sidebar
@@ -301,7 +303,6 @@ def _build_tracking_report(
     return output.getvalue()
 
 
-st.set_page_config(page_title="经营追踪", layout="wide")
 inject_global_styles()
 require_login("business_tracking")
 st.title("经营追踪")
