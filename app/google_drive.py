@@ -45,6 +45,26 @@ CACHE_SALES_EXTRAS_PATH = CACHE_DIR / "sales_extras.pkl"
 CACHE_TARGETS_PATH = CACHE_DIR / "targets_clean.pkl"
 CACHE_COST_SNAPSHOTS_PATH = CACHE_DIR / "cost_snapshots.pkl"
 MERGED_SALES_FILE_NAME = "Google Drive 合并销售数据"
+SALES_REFRESH_CORE_KEYS = {
+    "drive_auto_load_attempted",
+    "drive_load_status",
+    "quality",
+    "comparison",
+    "sheet_name",
+    "clean_data",
+    "current_file_name",
+    "source_file_name",
+    "data_source",
+    "sales_source_type",
+    "data_last_updated",
+    "source_columns",
+    "sales_drive_file_id",
+    "sales_drive_modified_time",
+    "home_annual_target",
+    "home_monthly_target",
+}
+REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_snapshot", "drive_target_", "target_")
+SUCCESSFUL_REFRESH_STATUSES = {"loaded", "cached", "unchanged"}
 
 
 class DriveUserError(RuntimeError):
@@ -774,6 +794,34 @@ def _restore_cost_snapshot_cache(manifest_signature: str | None = None) -> tuple
         return None
 
 
+def _get_session_cost_snapshots() -> tuple[CostSnapshotRegistry, list[CostSnapshot]] | None:
+    st = _get_streamlit()
+    registry = st.session_state.get("cost_snapshot_registry")
+    snapshots = st.session_state.get("cost_snapshots")
+    if isinstance(registry, CostSnapshotRegistry) and isinstance(snapshots, list):
+        return registry, snapshots
+    return None
+
+
+def _set_session_cost_snapshots(
+    registry: CostSnapshotRegistry,
+    snapshots: list[CostSnapshot],
+    status: str,
+    message: str,
+) -> None:
+    st = _get_streamlit()
+    st.session_state["cost_snapshot_registry"] = registry
+    st.session_state["cost_snapshots"] = snapshots
+    st.session_state["drive_cost_status"] = status
+    st.session_state["drive_cost_message"] = message
+    st.session_state["drive_cost_snapshot_count"] = len(snapshots)
+    st.session_state["drive_cost_registry_count"] = len(registry.entries)
+    version_dates = sorted({str(snapshot.version_date.date()) for snapshot in snapshots})
+    st.session_state["drive_cost_version_dates"] = ", ".join(version_dates)
+    st.session_state["drive_cost_loaded_at"] = _now_text()
+    st.session_state["drive_cost_load_status"] = DriveLoadItemStatus(status, message)
+
+
 def _write_cost_snapshot_cache(
     registry: CostSnapshotRegistry,
     snapshots: list[CostSnapshot],
@@ -1431,14 +1479,34 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
 
 def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry, list[CostSnapshot]]:
     start = _timer()
-    config = get_drive_config()
-    service = get_drive_service(config)
-    registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
+    session_cost = _get_session_cost_snapshots()
+    if not force and session_cost is not None:
+        registry, snapshots = session_cost
+        _perf_log("load_drive_cost_snapshots", start, len(snapshots), "session")
+        return registry, snapshots
+
+    try:
+        config = get_drive_config()
+        service = get_drive_service(config)
+        registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
+    except DriveUserError as exc:
+        if session_cost is not None:
+            registry, snapshots = session_cost
+            _set_session_cost_snapshots(
+                registry,
+                snapshots,
+                "using_previous",
+                f"成本快照刷新失败，当前继续使用上一次成功成本数据。失败原因：{exc}",
+            )
+            return registry, snapshots
+        raise
+
     manifest = _cost_manifest(registry)
     manifest_signature = _cost_manifest_signature(manifest)
     if not force:
         cached = _restore_cost_snapshot_cache(manifest_signature)
         if cached is not None:
+            _set_session_cost_snapshots(cached[0], cached[1], "cached", "成本快照已从本地缓存加载。")
             return cached
 
     snapshots: list[CostSnapshot] = []
@@ -1466,7 +1534,19 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
 
     manifest = _cost_manifest(registry)
     manifest_signature = _cost_manifest_signature(manifest)
+    if not snapshots and session_cost is not None:
+        previous_registry, previous_snapshots = session_cost
+        _set_session_cost_snapshots(
+            previous_registry,
+            previous_snapshots,
+            "using_previous",
+            "Drive 中未找到有效成本快照，当前继续使用上一次成功成本数据。",
+        )
+        _perf_log("load_drive_cost_snapshots", start, len(previous_snapshots), "drive-failed-previous")
+        return previous_registry, previous_snapshots
+
     _write_cost_snapshot_cache(registry, snapshots, manifest, manifest_signature)
+    _set_session_cost_snapshots(registry, snapshots, "loaded", "成本快照已从 Google Drive 加载。")
     _perf_log("load_drive_cost_snapshots", start, len(snapshots), "drive")
     return registry, snapshots
 
@@ -1489,6 +1569,68 @@ def clear_drive_state() -> None:
         st.cache_data.clear()
     except Exception:
         pass
+
+
+def _snapshot_refresh_state() -> dict[str, Any]:
+    st = _get_streamlit()
+    keys = {
+        key
+        for key in st.session_state.keys()
+        if key in SALES_REFRESH_CORE_KEYS or any(str(key).startswith(prefix) for prefix in REFRESH_STATE_PREFIXES)
+    }
+    return {key: st.session_state.get(key) for key in keys}
+
+
+def _restore_refresh_state(snapshot: dict[str, Any]) -> None:
+    st = _get_streamlit()
+    managed_keys = {
+        key
+        for key in st.session_state.keys()
+        if key in SALES_REFRESH_CORE_KEYS or any(str(key).startswith(prefix) for prefix in REFRESH_STATE_PREFIXES)
+    }
+    for key in managed_keys - set(snapshot):
+        st.session_state.pop(key, None)
+    for key, value in snapshot.items():
+        st.session_state[key] = value
+
+
+def _successful_item_status(status: DriveLoadItemStatus | None) -> bool:
+    return isinstance(status, DriveLoadItemStatus) and status.status in SUCCESSFUL_REFRESH_STATUSES
+
+
+def _successful_cost_refresh(snapshots: list[CostSnapshot]) -> bool:
+    st = _get_streamlit()
+    status = st.session_state.get("drive_cost_load_status")
+    return _successful_item_status(status) and bool(snapshots)
+
+
+def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
+    previous_state = _snapshot_refresh_state()
+    clear_drive_state()
+    try:
+        _registry, cost_snapshots = load_drive_cost_snapshots(force=True)
+    except DriveUserError as exc:
+        _restore_refresh_state(previous_state)
+        return None, f"成本快照刷新失败，当前继续使用旧数据。失败原因：{exc}"
+
+    if not _successful_cost_refresh(cost_snapshots):
+        cost_message = str(_get_streamlit().session_state.get("drive_cost_message") or "未找到有效成本快照。")
+        _restore_refresh_state(previous_state)
+        return None, f"成本快照刷新未完成，当前继续使用旧数据。{cost_message}"
+
+    refreshed = load_drive_business_files(force=True)
+    if not _successful_item_status(refreshed.sales):
+        sales_message = refreshed.sales.message or "销售数据刷新失败。"
+        _restore_refresh_state(previous_state)
+        return refreshed, f"销售数据刷新失败，当前继续使用旧数据。失败原因：{sales_message}"
+
+    messages = [refreshed.sales.message]
+    cost_status = _get_streamlit().session_state.get("drive_cost_load_status")
+    if isinstance(cost_status, DriveLoadItemStatus) and cost_status.message:
+        messages.append(cost_status.message)
+    if refreshed.targets.message:
+        messages.append(refreshed.targets.message)
+    return refreshed, "；".join(message for message in messages if message)
 
 
 def _source_text(source_type: str | None, source_label: str | None) -> str:
@@ -1605,15 +1747,22 @@ def render_data_source_sidebar(show_uploaders: bool = False):
             if st.session_state.get("drive_target_selection_reason"):
                 st.caption(f"选择依据：{st.session_state['drive_target_selection_reason']}")
 
+            st.markdown("**成本快照**")
+            st.caption(f"状态：{st.session_state.get('drive_cost_status') or '未加载'}")
+            st.caption(f"快照文件数：{st.session_state.get('drive_cost_snapshot_count', '无')}")
+            st.caption(f"Registry 行数：{st.session_state.get('drive_cost_registry_count', '无')}")
+            st.caption(f"成本版本日期：{st.session_state.get('drive_cost_version_dates') or '无'}")
+            st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_cost_loaded_at') or '无'}")
+            if st.session_state.get("drive_cost_message"):
+                st.caption(f"说明：{st.session_state['drive_cost_message']}")
+
         if can_use_data_sync:
             with st.expander("数据同步", expanded=False):
                 if st.button("刷新 Google Drive 数据", use_container_width=True):
-                    clear_drive_state()
                     with st.spinner("正在重新加载 Google Drive 数据..."):
-                        refreshed = load_drive_business_files(force=True)
-                    messages = [item.message for item in [refreshed.sales, refreshed.targets] if item.message]
-                    if messages:
-                        st.session_state["drive_refresh_message"] = "；".join(messages)
+                        _refreshed, message = refresh_drive_data_transaction()
+                    if message:
+                        st.session_state["drive_refresh_message"] = message
                     st.rerun()
                 if st.session_state.get("drive_refresh_message"):
                     st.caption(st.session_state["drive_refresh_message"])

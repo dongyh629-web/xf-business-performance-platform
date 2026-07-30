@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+import pandas as pd
+
+from app import google_drive
+from app.google_drive import DriveLoadItemStatus, DriveLoadStatus, DriveUserError
+
+
+class _FakeCacheData:
+    def clear(self) -> None:
+        return None
+
+
+class _FakeStreamlit:
+    def __init__(self) -> None:
+        self.session_state: dict = {}
+        self.cache_data = _FakeCacheData()
+
+
+def _status(sales_status: str = "loaded") -> DriveLoadStatus:
+    return DriveLoadStatus(
+        configured=True,
+        message="Google Drive 已配置。",
+        sales=DriveLoadItemStatus(sales_status, f"sales {sales_status}"),
+        targets=DriveLoadItemStatus("using_previous", "目标失败，继续使用旧数据。"),
+    )
+
+
+class DriveRefreshTransactionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.fake_st = _FakeStreamlit()
+        self.fake_st.session_state.update(
+            {
+                "clean_data": pd.DataFrame({"Sales Amount": [100.0]}),
+                "drive_sales_status": "旧销售",
+                "drive_sales_row_count": 1,
+                "cost_snapshot_registry": "old_registry",
+                "cost_snapshots": ["old_cost"],
+                "drive_cost_load_status": DriveLoadItemStatus("loaded", "old cost"),
+                "drive_cost_status": "旧成本",
+                "drive_cost_snapshot_count": 1,
+            }
+        )
+        self.streamlit_patch = patch.object(google_drive, "_get_streamlit", return_value=self.fake_st)
+        self.streamlit_patch.start()
+
+    def tearDown(self) -> None:
+        self.streamlit_patch.stop()
+
+    def _cost_success(self):
+        self.fake_st.session_state["cost_snapshot_registry"] = "new_registry"
+        self.fake_st.session_state["cost_snapshots"] = ["new_cost"]
+        self.fake_st.session_state["drive_cost_load_status"] = DriveLoadItemStatus("loaded", "new cost")
+        self.fake_st.session_state["drive_cost_status"] = "新成本"
+        return "new_registry", ["new_cost"]
+
+    def _sales_success(self, force: bool = True):
+        self.fake_st.session_state["clean_data"] = pd.DataFrame({"Sales Amount": [200.0]})
+        self.fake_st.session_state["drive_sales_status"] = "新销售"
+        self.fake_st.session_state["drive_sales_row_count"] = 1
+        return _status("loaded")
+
+    def test_refresh_success_updates_sales_and_cost(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=lambda force=True: self._cost_success()), patch.object(
+            google_drive, "load_drive_business_files", side_effect=self._sales_success
+        ):
+            _status_result, message = google_drive.refresh_drive_data_transaction()
+
+        self.assertIn("sales loaded", message)
+        self.assertEqual(["new_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(200.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
+    def test_sales_success_cost_failure_keeps_previous_complete_state(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=DriveUserError("cost missing")), patch.object(
+            google_drive, "load_drive_business_files", side_effect=self._sales_success
+        ) as sales_loader:
+            _status_result, message = google_drive.refresh_drive_data_transaction()
+
+        sales_loader.assert_not_called()
+        self.assertIn("继续使用旧数据", message)
+        self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(100.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
+    def test_sales_failure_cost_success_keeps_previous_complete_state(self) -> None:
+        def failed_sales(force: bool = True):
+            self.fake_st.session_state["clean_data"] = pd.DataFrame({"Sales Amount": [200.0]})
+            return _status("failed")
+
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=lambda force=True: self._cost_success()), patch.object(
+            google_drive, "load_drive_business_files", side_effect=failed_sales
+        ):
+            _status_result, message = google_drive.refresh_drive_data_transaction()
+
+        self.assertIn("继续使用旧数据", message)
+        self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(100.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
+    def test_sales_and_cost_failure_keeps_previous_complete_state(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=DriveUserError("cost missing")), patch.object(
+            google_drive, "load_drive_business_files", return_value=_status("failed")
+        ) as sales_loader:
+            _status_result, message = google_drive.refresh_drive_data_transaction()
+
+        sales_loader.assert_not_called()
+        self.assertIn("继续使用旧数据", message)
+        self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(100.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
+    def test_cost_coverage_state_is_not_reset_to_empty_after_refresh_failure(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=DriveUserError("cost missing")):
+            google_drive.refresh_drive_data_transaction()
+
+        self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(1, self.fake_st.session_state["drive_cost_snapshot_count"])
+        self.assertNotEqual(0, len(self.fake_st.session_state["cost_snapshots"]))
+
+
+if __name__ == "__main__":
+    unittest.main()
