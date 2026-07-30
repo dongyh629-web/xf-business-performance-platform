@@ -273,7 +273,7 @@ with right:
             (f"Top 20%（{concentration['Top 20 Percent Customer Count']}户）", f"{concentration['Top 20 Percent Contribution']:.1%}"),
         ]
     )
-    st.dataframe(abc, width="stretch", hide_index=True)
+    st.dataframe(abc, use_container_width=True, hide_index=True)
 
 section_header("客户汇总表")
 st.caption("Customer Summary Table。表格筛选仅影响本表，不改变页面顶部 KPI、ABC 分布或全局筛选。同比增长按当前筛选范围内最近年份与前一年销售额计算；月度趋势基于当前日期口径。")
@@ -415,7 +415,7 @@ else:
                 ]
                 ]
             ),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "月度趋势": st.column_config.LineChartColumn("月度趋势", help="Monthly Trend：当前筛选范围内每月销售额变化。"),
@@ -444,4 +444,4 @@ with right:
     st.plotly_chart(bar_chart(customer_products.sort_values("Sales Amount"), "Sales Amount", "Product Group", "客户购买产品组", "h"), width="stretch")
 
 with st.expander("查看客户订单明细"):
-    st.dataframe(customer_df.sort_values("Sales Date", ascending=False).head(500), width="stretch")
+    st.dataframe(customer_df.sort_values("Sales Date", ascending=False).head(500), use_container_width=True)

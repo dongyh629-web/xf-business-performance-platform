@@ -53,7 +53,7 @@ checks = pd.DataFrame(
         {"异常类型": "缺 Area（后续补充）", "数量": int(df["Area"].isna().sum()) if "Area" in df.columns else len(df)},
     ]
 )
-st.dataframe(checks, width="stretch", hide_index=True)
+st.dataframe(checks, use_container_width=True, hide_index=True)
 
 if not suspicious_duplicates.empty:
     duplicate_group_cols = ["Order No.", "Customer", "Product", "Quantity", "Sales Amount"]
@@ -70,7 +70,7 @@ if not suspicious_duplicates.empty:
     group_count = suspicious_duplicates[duplicate_group_cols].drop_duplicates().shape[0]
     impact_amount = suspicious_duplicates["Sales Amount"].sum()
     st.warning(f"发现疑似重复组 {group_count:,} 组，影响金额 £{impact_amount:,.2f}。当前系统未自动删除这些行。")
-    st.dataframe(duplicate_groups, width="stretch", hide_index=True)
+    st.dataframe(duplicate_groups, use_container_width=True, hide_index=True)
     st.download_button(
         "下载疑似重复明细 CSV",
         suspicious_duplicates.to_csv(index=False).encode("utf-8-sig"),
@@ -79,19 +79,19 @@ if not suspicious_duplicates.empty:
     )
 
 with st.expander("查看 0 金额行"):
-    st.dataframe(df[df["Sales Amount"].eq(0)].head(300), width="stretch")
+    st.dataframe(df[df["Sales Amount"].eq(0)].head(300), use_container_width=True)
 
 with st.expander("查看缺客户类型行"):
-    st.dataframe(df[df["Customer Type"].isna()].head(300), width="stretch")
+    st.dataframe(df[df["Customer Type"].isna()].head(300), use_container_width=True)
 
 with st.expander("查看缺产品组行"):
-    st.dataframe(df[df["Product Group"].isna()].head(300), width="stretch")
+    st.dataframe(df[df["Product Group"].isna()].head(300), use_container_width=True)
 
 with st.expander("查看疑似重复明细（当前未自动删除）"):
     if suspicious_duplicates.empty:
         st.caption("当前筛选范围内没有疑似重复行。")
     else:
-        st.dataframe(suspicious_duplicates.head(500), width="stretch")
+        st.dataframe(suspicious_duplicates.head(500), use_container_width=True)
 
 with st.expander("查看日期逻辑异常（Completed Date 早于 Order Date）"):
     if date_logic_anomalies.empty:
@@ -109,7 +109,7 @@ with st.expander("查看日期逻辑异常（Completed Date 早于 Order Date）
             "Sub Total",
         ]
         existing_cols = [col for col in cols if col in date_logic_anomalies.columns]
-        st.dataframe(date_logic_anomalies[existing_cols], width="stretch")
+        st.dataframe(date_logic_anomalies[existing_cols], use_container_width=True)
         st.download_button(
             "下载日期逻辑异常 CSV",
             date_logic_anomalies[existing_cols].to_csv(index=False).encode("utf-8-sig"),
@@ -129,7 +129,7 @@ with st.expander("查看三种日期口径月度销售额对比"):
         monthly.columns = [f"{basis} {col}" for col in monthly.columns]
         basis_frames.append(monthly)
     comparison = pd.concat(basis_frames, axis=1).fillna(0).reset_index().rename(columns={"Performance Month": "月份"})
-    st.dataframe(comparison, width="stretch", hide_index=True)
+    st.dataframe(comparison, use_container_width=True, hide_index=True)
 
 with st.expander("查看月份移动明细"):
     moved = df[
@@ -148,4 +148,4 @@ with st.expander("查看月份移动明细"):
             .reset_index()
             .sort_values("涉及销售额", ascending=False)
         )
-        st.dataframe(movement, width="stretch", hide_index=True)
+        st.dataframe(movement, use_container_width=True, hide_index=True)

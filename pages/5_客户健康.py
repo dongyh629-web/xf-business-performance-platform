@@ -346,7 +346,7 @@ else:
 
     st.caption(f"当前筛选结果 {len(filtered_risk):,} 位客户，页面默认显示前 100 位；下载文件包含完整结果。")
     risk_view = filtered_risk.head(100)
-    st.dataframe(_style_status_columns(_display_risk_table(risk_view)), width="stretch", hide_index=True)
+    st.dataframe(_style_status_columns(_display_risk_table(risk_view)), use_container_width=True, hide_index=True)
     st.download_button(
         "下载风险客户名单 / Download Customer Risk List",
         _csv_bytes(filtered_risk),
@@ -362,7 +362,7 @@ if load_dormant:
     else:
         st.caption("这些客户不进入今日待跟进前列，用于后续清理、重新激活或单独复盘。")
         st.caption(f"共 {len(dormant_lost):,} 位客户，页面默认显示前 100 位；下载文件包含完整结果。")
-        st.dataframe(_style_status_columns(_display_risk_table(dormant_lost.head(100))), width="stretch", hide_index=True)
+        st.dataframe(_style_status_columns(_display_risk_table(dormant_lost.head(100))), use_container_width=True, hide_index=True)
         st.download_button(
             "下载长期沉睡客户 / Download Dormant Customers",
             _csv_bytes(dormant_lost),
@@ -402,7 +402,7 @@ if anchor.to_period("M") < pd.Timestamp(NEW_CUSTOMER_START_DATE).to_period("M"):
 elif result.new_customers.empty:
     st.info("当前分析月份暂无新客户。")
 else:
-    st.dataframe(_display_new_table(result.new_customers), width="stretch", hide_index=True)
+    st.dataframe(_display_new_table(result.new_customers), use_container_width=True, hide_index=True)
     st.download_button(
         "下载新客户名单 / Download New Customers",
         _csv_bytes(result.new_customers),

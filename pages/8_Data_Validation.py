@@ -210,14 +210,14 @@ if zero_rows.empty:
     st.caption("没有识别到零价出库记录。")
     st.caption("No zero-value outbound rows identified.")
 else:
-    st.dataframe(_validation_columns(zero_rows.head(300)), width="stretch", hide_index=True)
+    st.dataframe(_validation_columns(zero_rows.head(300)), use_container_width=True, hide_index=True)
 
 section_header("单位验证", "Unit Validation")
 if unit_rows.empty:
     st.caption("没有识别到单位/价格/数量风险记录。")
     st.caption("No unit, price or quantity risk rows identified.")
 else:
-    st.dataframe(_validation_columns(unit_rows.head(500)), width="stretch", hide_index=True)
+    st.dataframe(_validation_columns(unit_rows.head(500)), use_container_width=True, hide_index=True)
 
 section_header("成本覆盖分析", "Cost Coverage Analysis")
 coverage_cols = st.columns(3)
@@ -227,15 +227,15 @@ coverage_cols[2].metric("SKU 覆盖率\nSKU Coverage", _percent_or_na(summary["S
 
 tabs = st.tabs(["按月份 / By Month", "按产品系列 / By Product Group", "按客户 / By Customer"])
 with tabs[0]:
-    st.dataframe(_format_table(coverage_by_month(metrics)), width="stretch", hide_index=True)
+    st.dataframe(_format_table(coverage_by_month(metrics)), use_container_width=True, hide_index=True)
 with tabs[1]:
-    st.dataframe(_format_table(coverage_by_dimension(metrics, "Product Group")), width="stretch", hide_index=True)
+    st.dataframe(_format_table(coverage_by_dimension(metrics, "Product Group")), use_container_width=True, hide_index=True)
 with tabs[2]:
     customer_dimension = "Customer Label" if "Customer Label" in metrics.columns else "Customer"
-    st.dataframe(_format_table(coverage_by_dimension(metrics, customer_dimension).head(200)), width="stretch", hide_index=True)
+    st.dataframe(_format_table(coverage_by_dimension(metrics, customer_dimension).head(200)), use_container_width=True, hide_index=True)
 
 section_header("毛利率区间", "Margin Bands")
-st.dataframe(_format_table(margin_band_analysis(metrics)), width="stretch", hide_index=True)
+st.dataframe(_format_table(margin_band_analysis(metrics)), use_container_width=True, hide_index=True)
 
 section_header("重点异常", "Top Exceptions")
 exceptions = top_exceptions(metrics, limit=20)
@@ -253,9 +253,9 @@ for tab, (name, table) in zip(exception_tabs, exceptions.items()):
             st.caption(f"{name}: 无记录")
         else:
             if "Validation Reason" in table.columns:
-                st.dataframe(_validation_columns(table), width="stretch", hide_index=True)
+                st.dataframe(_validation_columns(table), use_container_width=True, hide_index=True)
             else:
-                st.dataframe(_format_table(table), width="stretch", hide_index=True)
+                st.dataframe(_format_table(table), use_container_width=True, hide_index=True)
 
 section_header("利润就绪评分", "Profitability Readiness Score")
 st.json(

@@ -309,7 +309,7 @@ def _render_total_summary(
         with st.expander("目标汇总明细", expanded=False):
             display = target_detail.copy()
             display["Target"] = display["Target"].map(_fmt_money)
-            st.dataframe(display, width="stretch", hide_index=True)
+            st.dataframe(display, use_container_width=True, hide_index=True)
 
 
 def _range_label_options(df: pd.DataFrame) -> list[str]:
@@ -503,7 +503,7 @@ else:
     ]
     st.dataframe(
         _style_overview(_display_table(visible[compact_columns])),
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
         column_config={
             "当前状态": st.column_config.TextColumn("当前状态", width="small"),
@@ -548,7 +548,7 @@ else:
                 "Target Completion": "目标完成率",
             }
         ),
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -567,7 +567,7 @@ with right:
             去年同期累计=lambda data: data["去年同期累计"].map(_fmt_money),
             年累计同比=lambda data: data["年累计同比"].map(_fmt_percent),
         ),
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -588,17 +588,17 @@ if load_detail and detail_range:
     col1, col2 = st.columns(2)
     with col1:
         section_header("主要增长贡献", "按本月较去年同期的销售额增量排序。")
-        st.dataframe(sku_growth.rename(columns={product_dimension: "SKU", "Current": "本月", "Previous": "去年同期", "Change": "增量"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 增量=lambda data: data["增量"].map(_fmt_money)), width="stretch", hide_index=True)
+        st.dataframe(sku_growth.rename(columns={product_dimension: "SKU", "Current": "本月", "Previous": "去年同期", "Change": "增量"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 增量=lambda data: data["增量"].map(_fmt_money)), use_container_width=True, hide_index=True)
     with col2:
         section_header("主要下降拖累", "按本月较去年同期的销售额下降排序。")
-        st.dataframe(sku_decline.rename(columns={product_dimension: "SKU", "Current": "本月", "Previous": "去年同期", "Change": "差额"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 差额=lambda data: data["差额"].map(_fmt_money)), width="stretch", hide_index=True)
+        st.dataframe(sku_decline.rename(columns={product_dimension: "SKU", "Current": "本月", "Previous": "去年同期", "Change": "差额"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 差额=lambda data: data["差额"].map(_fmt_money)), use_container_width=True, hide_index=True)
     col1, col2 = st.columns(2)
     with col1:
         st.caption("Top 10 贡献客户增长")
-        st.dataframe(customer_growth.rename(columns={customer_dimension: "客户", "Current": "本月", "Previous": "去年同期", "Change": "增量"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 增量=lambda data: data["增量"].map(_fmt_money)), width="stretch", hide_index=True)
+        st.dataframe(customer_growth.rename(columns={customer_dimension: "客户", "Current": "本月", "Previous": "去年同期", "Change": "增量"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 增量=lambda data: data["增量"].map(_fmt_money)), use_container_width=True, hide_index=True)
     with col2:
         st.caption("Top 10 贡献客户下降")
-        st.dataframe(customer_decline.rename(columns={customer_dimension: "客户", "Current": "本月", "Previous": "去年同期", "Change": "差额"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 差额=lambda data: data["差额"].map(_fmt_money)), width="stretch", hide_index=True)
+        st.dataframe(customer_decline.rename(columns={customer_dimension: "客户", "Current": "本月", "Previous": "去年同期", "Change": "差额"}).assign(本月=lambda data: data["本月"].map(_fmt_money), 去年同期=lambda data: data["去年同期"].map(_fmt_money), 差额=lambda data: data["差额"].map(_fmt_money)), use_container_width=True, hide_index=True)
 
 if "table" in locals() and not table.empty:
     load_full_detail = st.toggle("查看完整指标明细", value=False)
@@ -622,6 +622,6 @@ if "table" in locals() and not table.empty:
         ]
         st.dataframe(
             _style_overview(_display_table(table[detail_columns])),
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
         )

@@ -116,7 +116,7 @@ else:
 
     st.dataframe(
         _format_group_snapshot(group_snapshot).style.map(_yoy_cell_style, subset=["同比增长率"]),
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
     )
 
@@ -166,4 +166,4 @@ with right:
         st.plotly_chart(bar_chart(buyers.sort_values("Sales Amount"), "Sales Amount", "Customer", "购买客户排行", "h"), width="stretch")
 
 with st.expander("查看产品明细"):
-    st.dataframe(product_df.sort_values("Sales Date", ascending=False).head(500), width="stretch")
+    st.dataframe(product_df.sort_values("Sales Date", ascending=False).head(500), use_container_width=True)

@@ -468,10 +468,10 @@ def _style_profitability_table(table: pd.DataFrame, column_order: list[str] | No
 
 def _render_profitability_table(table: pd.DataFrame, column_order: list[str] | None = None, **kwargs) -> None:
     try:
-        st.dataframe(_style_profitability_table(table, column_order), width="stretch", hide_index=True, **kwargs)
+        st.dataframe(_style_profitability_table(table, column_order), use_container_width=True, hide_index=True, **kwargs)
     except Exception:
         LOGGER.warning("Profitability table styling failed; falling back to plain table", exc_info=True)
-        st.dataframe(_format_table(table, column_order), width="stretch", hide_index=True, **kwargs)
+        st.dataframe(_format_table(table, column_order), use_container_width=True, hide_index=True, **kwargs)
 
 
 def _profitability_summary(table: pd.DataFrame, entity_column: str, label: str) -> None:

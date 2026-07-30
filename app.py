@@ -144,7 +144,7 @@ def render_home_page() -> None:
             file_name="filtered_sales.csv",
             mime="text/csv",
         )
-        st.dataframe(filtered.head(200), width="stretch")
+        st.dataframe(filtered.head(200), use_container_width=True)
 
     with st.expander("查看数据质量摘要"):
         if quality:
@@ -157,7 +157,7 @@ def render_home_page() -> None:
         if comparison:
             summary_keys = ["原始行数", "旧清洗后行数", "新清洗后行数", "旧销售额", "新销售额", "差额", "差异比例", "因停止删除疑似重复而恢复的金额", "因日期口径变化而移动月份的订单数量", "因日期口径变化而移动月份的金额"]
             st.json({key: comparison[key] for key in summary_keys})
-            st.dataframe(comparison["每月销售额差异"], width="stretch")
+            st.dataframe(comparison["每月销售额差异"], use_container_width=True)
         else:
             st.caption("重新上传文件后会生成新旧口径对比。")
 

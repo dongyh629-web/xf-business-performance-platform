@@ -339,7 +339,7 @@ if pending is not None:
     cols[3].metric("公司年度箱数目标", "" if pending.company_annual_case_target is None else f"{pending.company_annual_case_target:,.0f}")
     st.caption(f"文件名：{st.session_state.get('pending_target_excel_name')}")
     st.caption(f"金额目标工作表：{pending.amount_sheet} | 数量目标工作表：{pending.case_sheet}")
-    st.dataframe(pending.amount_data.head(5), width="stretch", hide_index=True)
+    st.dataframe(pending.amount_data.head(5), use_container_width=True, hide_index=True)
     if st.button("确认导入目标到当前会话", type="primary"):
         _store_targets(
             pending.company_targets,
@@ -381,7 +381,7 @@ if st.button("平均分配年度目标"):
 
 edited_targets = st.data_editor(
     editor_rows,
-    width="stretch",
+    use_container_width=True,
     hide_index=True,
     disabled=["Year", "Month", "Month Label", "Original Target"],
     column_config={
@@ -494,7 +494,7 @@ st.dataframe(
             "状态",
         ]
     ],
-    width="stretch",
+    use_container_width=True,
     hide_index=True,
 )
 
@@ -507,14 +507,14 @@ if not amount_table.empty:
         ["Original Amount Target", "Revised Amount Target", "Actual Sales Amount", "Amount Gap", "Previous Year Actual"],
         ["Amount Completion Rate", "YoY"],
     )
-    st.dataframe(amount_display, width="stretch", hide_index=True)
+    st.dataframe(amount_display, use_container_width=True, hide_index=True)
 
 case_targets = st.session_state.get("target_case_data")
 case_table = build_product_group_case_tracking(case_targets, target_year) if case_targets is not None else pd.DataFrame()
 if not case_table.empty:
     section_header("系列数量目标")
     st.caption("实际箱数需要结合 SKU 箱规进一步计算，当前不使用订单数或销售行数代替。")
-    st.dataframe(case_table, width="stretch", hide_index=True)
+    st.dataframe(case_table, use_container_width=True, hide_index=True)
 
 section_header("后续月份平均分摊建议")
 st.caption("正式缺口只来自已结束月份的未完成部分；当前进行中月份暂不计入再分配，未来月份作为缺口承接月份。")
@@ -524,7 +524,7 @@ if allocation.empty:
     st.info("当前没有未来月份可承接缺口。")
 else:
     allocation_display = _display_money_table(allocation, ["当前调整后目标", "平均追加目标", "建议调整后目标"], [])
-    st.dataframe(allocation_display, width="stretch", hide_index=True)
+    st.dataframe(allocation_display, use_container_width=True, hide_index=True)
 
 section_header("下载经营追踪报告")
 try:
