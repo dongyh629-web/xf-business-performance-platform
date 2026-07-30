@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+import logging
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -21,7 +22,18 @@ from app.business_metrics import (
     suspicious_unit_comparison,
 )
 from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_data_source_sidebar
+from app.profitability_table_styles import (
+    cost_to_sales_style,
+    coverage_cell_style,
+    margin_cell_style,
+    profit_cell_style,
+    status_cell_style,
+    zero_value_cost_style,
+)
 from app.ui import inject_global_styles, money, percent, section_header, style_plotly
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _money_or_na(value: object) -> str:
@@ -308,178 +320,158 @@ def _completed_date_filter(data: pd.DataFrame) -> pd.DataFrame:
     return filtered
 
 
-def _format_money_columns(table: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    display = table.copy()
+MONEY_COLUMNS = {
+    "Sales Amount",
+    "Costed Sales",
+    "Normal Sales",
+    "Costed Normal Sales",
+    "Uncosted Sales",
+    "Unit Selling Price / ASP",
+    "Unit Selling Price",
+    "Unit Cost",
+    "Total Cost",
+    "Gross Profit",
+    "Normal Cost",
+    "Commercial Sales",
+    "Commercial Cost",
+    "Commercial Gross Profit",
+    "Zero-value Outbound Cost",
+    "Business Profit",
+    "Contribution After Zero-value Cost",
+    "Matched Sales Amount",
+}
+
+PERCENT_COLUMNS = {
+    "Weighted Margin",
+    "Commercial Gross Margin",
+    "Margin %",
+    "Cost Coverage",
+    "Cost to Sales Ratio",
+    "Gross Profit Contribution",
+    "Sales Contribution",
+    "Cost Contribution",
+}
+
+PRODUCT_PROFITABILITY_COLUMN_ORDER = [
+    "Product Code",
+    "Product Description",
+    "Product Group",
+    "Sales Amount",
+    "Costed Normal Sales",
+    "Commercial Gross Profit",
+    "Commercial Gross Margin",
+    "Cost Coverage",
+    "Quantity",
+    "Unit Selling Price / ASP",
+    "Unit Cost",
+    "Total Cost",
+    "Zero-value Outbound Cost",
+    "Business Profit",
+]
+
+TABLE_DROP_PREFERENCES = [
+    ("Commercial Sales", "Normal Sales"),
+    ("Commercial Cost", "Normal Cost"),
+    ("Gross Profit", "Commercial Gross Profit"),
+    ("Weighted Margin", "Commercial Gross Margin"),
+    ("Contribution After Zero-value Cost", "Business Profit"),
+    ("Costed Sales", "Costed Normal Sales"),
+]
+
+
+def _column_labels(columns: pd.Index) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    used: set[str] = set()
     for column in columns:
-        if column in display.columns:
-            display[column] = display[column].map(_money_or_na)
-    return display
+        label = COLUMN_LABELS.get(column, column)
+        if label in used:
+            label = f"{label}\n{column}"
+        used.add(label)
+        labels[column] = label
+    return labels
 
 
-def _format_percent_columns(table: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+def _prepare_display_table(table: pd.DataFrame, column_order: list[str] | None = None) -> pd.DataFrame:
     display = table.copy()
-    for column in columns:
-        if column in display.columns:
-            display[column] = display[column].map(_percent_or_na)
-    return display
+    for drop_column, preferred_column in TABLE_DROP_PREFERENCES:
+        if drop_column in display.columns and preferred_column in display.columns:
+            display = display.drop(columns=[drop_column])
+    if column_order:
+        ordered = [column for column in column_order if column in display.columns]
+        remaining = [column for column in display.columns if column not in ordered]
+        display = display.loc[:, ordered + remaining]
+    return display.reset_index(drop=True)
 
 
-def _format_table(table: pd.DataFrame) -> pd.DataFrame:
-    display = table.copy()
-    compatibility_aliases = {
-        "Commercial Sales": "Normal Sales",
-        "Commercial Cost": "Normal Cost",
-        "Commercial Gross Profit": "Gross Profit",
-        "Contribution After Zero-value Cost": "Business Profit",
-    }
-    for alias, preferred in compatibility_aliases.items():
-        if alias in display.columns and preferred in display.columns:
-            display = display.drop(columns=[alias])
-    if "Weighted Margin" in display.columns and "Commercial Gross Margin" in display.columns:
-        display = display.drop(columns=["Weighted Margin"])
-    money_columns = [
-        "Sales Amount",
-        "Costed Sales",
-        "Normal Sales",
-        "Costed Normal Sales",
-        "Uncosted Sales",
-        "Unit Selling Price / ASP",
-        "Unit Selling Price",
-        "Unit Cost",
-        "Total Cost",
-        "Gross Profit",
-        "Normal Cost",
-        "Commercial Sales",
-        "Commercial Cost",
-        "Commercial Gross Profit",
-        "Zero-value Outbound Cost",
-        "Business Profit",
-        "Contribution After Zero-value Cost",
-        "Matched Sales Amount",
-    ]
-    percent_columns = [
-        "Weighted Margin",
-        "Commercial Gross Margin",
-        "Margin %",
-        "Cost Coverage",
-        "Cost to Sales Ratio",
-        "Gross Profit Contribution",
-        "Sales Contribution",
-        "Cost Contribution",
-    ]
-    display = _format_money_columns(display, money_columns)
-    display = _format_percent_columns(display, percent_columns)
-    if "Quantity" in display.columns:
-        display["Quantity"] = pd.to_numeric(table["Quantity"], errors="coerce").map(lambda value: "" if pd.isna(value) else f"{value:,.2f}")
-    return _rename_display_columns(display)
-
-
-def _parse_display_number(value: object) -> float | None:
-    if value is None or pd.isna(value):
-        return None
-    text = str(value).strip()
-    if not text or text == "N/A":
-        return None
-    negative = text.startswith("-")
-    cleaned = text.replace("£", "").replace(",", "").replace("%", "").replace("+", "").replace("-", "").strip()
-    try:
-        number = float(cleaned)
-    except ValueError:
-        return None
-    return -number if negative else number
-
-
-def _profit_cell_style(value: object) -> str:
-    number = _parse_display_number(value)
-    if number is None:
-        return "color: #6b7280; background-color: #f9fafb;"
-    if number < 0:
-        return "color: #991b1b; background-color: #fff1f2;"
-    if number > 0:
-        return "color: #166534; background-color: #f0fdf4;"
-    return ""
-
-
-def _margin_cell_style(value: object) -> str:
-    number = _parse_display_number(value)
-    if number is None:
-        return "color: #6b7280; background-color: #f9fafb;"
-    if number < 0:
-        return "color: #991b1b; background-color: #fff1f2;"
-    if number < 10:
-        return "color: #9a3412; background-color: #fff7ed;"
-    if number < 20:
-        return "color: #854d0e; background-color: #fefce8;"
-    return "color: #166534; background-color: #f0fdf4;"
-
-
-def _coverage_cell_style(value: object) -> str:
-    number = _parse_display_number(value)
-    if number is None:
-        return "color: #6b7280; background-color: #f9fafb;"
-    if number < 30:
-        return "color: #991b1b; background-color: #fff1f2;"
-    if number < 70:
-        return "color: #854d0e; background-color: #fefce8;"
-    return "color: #166534; background-color: #f0fdf4;"
-
-
-def _cost_to_sales_style(value: object) -> str:
-    number = _parse_display_number(value)
-    if number is None:
-        return "color: #6b7280; background-color: #f9fafb;"
-    if number >= 100:
-        return "color: #991b1b; background-color: #fff1f2;"
-    if number >= 80:
-        return "color: #9a3412; background-color: #fff7ed;"
-    if number >= 60:
-        return "color: #854d0e; background-color: #fefce8;"
-    return ""
-
-
-def _zero_value_cost_style(value: object) -> str:
-    number = _parse_display_number(value)
-    if number is None or number <= 0:
+def _date_or_blank(value: object) -> str:
+    if pd.isna(value):
         return ""
-    if number >= 100:
-        return "color: #9a3412; background-color: #fff7ed;"
-    return "color: #9a3412;"
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.strftime("%Y-%m-%d")
 
 
-def _status_cell_style(value: object) -> str:
-    text = str(value)
-    if "Invalid" in text or "Missing" in text or "Duplicate" in text:
-        return "color: #991b1b; background-color: #fff1f2;"
-    if "No Cost" in text:
-        return "color: #6b7280; background-color: #f9fafb;"
-    return ""
+def _format_table(table: pd.DataFrame, column_order: list[str] | None = None) -> pd.DataFrame:
+    display = _prepare_display_table(table, column_order)
+    for column in [column for column in MONEY_COLUMNS if column in display.columns]:
+        display[column] = display[column].map(_money_or_na)
+    for column in [column for column in PERCENT_COLUMNS if column in display.columns]:
+        display[column] = display[column].map(_percent_or_na)
+    if "Quantity" in display.columns:
+        display["Quantity"] = pd.to_numeric(display["Quantity"], errors="coerce").map(lambda value: "" if pd.isna(value) else f"{value:,.2f}")
+    if "Completed Date" in display.columns:
+        display["Completed Date"] = pd.to_datetime(display["Completed Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return display.rename(columns=_column_labels(display.columns))
 
 
-def _style_profitability_table(table: pd.DataFrame):
-    styled = table.style
-    profit_columns = [column for column in table.columns if "Gross Profit" in str(column) or "毛利\n" in str(column)]
-    cost_to_sales_columns = [column for column in table.columns if "Cost to Sales" in str(column) or "成本销售比" in str(column)]
-    margin_columns = [
-        column
-        for column in table.columns
-        if ("Margin" in str(column) or "毛利率" in str(column)) and column not in cost_to_sales_columns
-    ]
-    coverage_columns = [column for column in table.columns if "Coverage" in str(column) or "覆盖率" in str(column)]
-    zero_cost_columns = [column for column in table.columns if "Zero-value" in str(column) or "零价成本" in str(column)]
-    status_columns = [column for column in table.columns if "Cost Match Status" in str(column) or "成本匹配状态" in str(column)]
+def _style_profitability_table(table: pd.DataFrame, column_order: list[str] | None = None):
+    raw_display = _prepare_display_table(table, column_order)
+    labels = _column_labels(raw_display.columns)
+    display = raw_display.rename(columns=labels)
+    styled = display.style
+
+    def labels_for(columns: set[str]) -> list[str]:
+        return [labels[column] for column in columns if column in raw_display.columns and labels[column] in display.columns]
+
+    money_columns = labels_for(MONEY_COLUMNS)
+    percent_columns = labels_for(PERCENT_COLUMNS)
+    quantity_columns = labels_for({"Quantity"})
+    date_columns = labels_for({"Completed Date"})
+    formatters = {column: _money_or_na for column in money_columns}
+    formatters.update({column: _percent_or_na for column in percent_columns})
+    formatters.update({column: (lambda value: "" if pd.isna(value) else f"{float(value):,.2f}") for column in quantity_columns})
+    formatters.update({column: _date_or_blank for column in date_columns})
+    if formatters:
+        styled = styled.format(formatters, na_rep="N/A")
+
+    profit_columns = labels_for({"Gross Profit", "Commercial Gross Profit"})
+    margin_columns = labels_for({"Weighted Margin", "Commercial Gross Margin", "Margin %"})
+    coverage_columns = labels_for({"Cost Coverage"})
+    cost_to_sales_columns = labels_for({"Cost to Sales Ratio"})
+    zero_cost_columns = labels_for({"Zero-value Outbound Cost"})
+    status_columns = labels_for({"Cost Match Status"})
     if profit_columns:
-        styled = styled.map(_profit_cell_style, subset=profit_columns)
+        styled = styled.map(profit_cell_style, subset=profit_columns)
     if margin_columns:
-        styled = styled.map(_margin_cell_style, subset=margin_columns)
+        styled = styled.map(margin_cell_style, subset=margin_columns)
     if coverage_columns:
-        styled = styled.map(_coverage_cell_style, subset=coverage_columns)
+        styled = styled.map(coverage_cell_style, subset=coverage_columns)
     if cost_to_sales_columns:
-        styled = styled.map(_cost_to_sales_style, subset=cost_to_sales_columns)
+        styled = styled.map(cost_to_sales_style, subset=cost_to_sales_columns)
     if zero_cost_columns:
-        styled = styled.map(_zero_value_cost_style, subset=zero_cost_columns)
+        styled = styled.map(zero_value_cost_style, subset=zero_cost_columns)
     if status_columns:
-        styled = styled.map(_status_cell_style, subset=status_columns)
+        styled = styled.map(status_cell_style, subset=status_columns)
     return styled
+
+
+def _render_profitability_table(table: pd.DataFrame, column_order: list[str] | None = None, **kwargs) -> None:
+    try:
+        st.dataframe(_style_profitability_table(table, column_order), width="stretch", hide_index=True, **kwargs)
+    except Exception:
+        LOGGER.warning("Profitability table styling failed; falling back to plain table", exc_info=True)
+        st.dataframe(_format_table(table, column_order), width="stretch", hide_index=True, **kwargs)
 
 
 def _profitability_summary(table: pd.DataFrame, entity_column: str, label: str) -> None:
@@ -552,9 +544,7 @@ def _transaction_columns(data: pd.DataFrame) -> pd.DataFrame:
     ]
     available = [column for column in columns if column in data.columns]
     display = data[available].copy()
-    if "Completed Date" in display.columns:
-        display["Completed Date"] = pd.to_datetime(display["Completed Date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    return _format_table(display)
+    return display.reset_index(drop=True)
 
 
 def _product_profitability_filters(data: pd.DataFrame) -> pd.DataFrame:
@@ -726,7 +716,7 @@ else:
     ascending = sort_column in ["Commercial Gross Margin", "Cost Coverage"]
     sorted_product_table = product_table.sort_values(sort_column, ascending=ascending, na_position="last")
     _profitability_summary(product_table, "Product Code", "产品利润")
-    st.dataframe(_style_profitability_table(_format_table(sorted_product_table.head(200))), width="stretch", hide_index=True)
+    _render_profitability_table(sorted_product_table.head(200), PRODUCT_PROFITABILITY_COLUMN_ORDER)
 
 section_header("客户利润")
 st.markdown('<div class="xf-profit-section-caption">Customer Profitability</div>', unsafe_allow_html=True)
@@ -735,7 +725,7 @@ if customer_table.empty:
     st.info("当前筛选范围内没有客户利润数据。")
 else:
     _profitability_summary(customer_table, "Customer", "客户利润")
-    st.dataframe(_style_profitability_table(_format_table(customer_table.head(200))), width="stretch", hide_index=True)
+    _render_profitability_table(customer_table.head(200))
 
 section_header("产品系列利润")
 st.markdown('<div class="xf-profit-section-caption">Product Group Profitability</div>', unsafe_allow_html=True)
@@ -744,21 +734,21 @@ if group_table.empty:
     st.info("当前筛选范围内没有产品系列利润数据。")
 else:
     _profitability_summary(group_table, "Product Group", "产品系列利润")
-    st.dataframe(_style_profitability_table(_format_table(group_table.head(200))), width="stretch", hide_index=True)
+    _render_profitability_table(group_table.head(200))
 
 section_header("毛利核对")
 st.markdown('<div class="xf-profit-section-caption">Margin Reconciliation</div>', unsafe_allow_html=True)
 if not product_table.empty:
     with st.expander("A. 低毛利产品 / Lowest Margin Products", expanded=True):
         lowest = product_table[product_table["Commercial Gross Margin"].notna()].sort_values("Commercial Gross Margin", ascending=True).head(30)
-        st.dataframe(_style_profitability_table(_format_table(lowest)), width="stretch", hide_index=True)
+        _render_profitability_table(lowest, PRODUCT_PROFITABILITY_COLUMN_ORDER)
 
     with st.expander("B. 高成本销售比产品 / Highest Cost-to-Sales Products", expanded=False):
         cost_to_sales = product_table.copy()
         cost_to_sales["Cost to Sales Ratio"] = pd.to_numeric(cost_to_sales["Total Cost"], errors="coerce") / pd.to_numeric(
             cost_to_sales["Sales Amount"], errors="coerce"
         )
-        st.dataframe(_style_profitability_table(_format_table(cost_to_sales.sort_values("Cost to Sales Ratio", ascending=False).head(30))), width="stretch", hide_index=True)
+        _render_profitability_table(cost_to_sales.sort_values("Cost to Sales Ratio", ascending=False).head(30), PRODUCT_PROFITABILITY_COLUMN_ORDER)
 
 section_header("异常交易")
 st.markdown('<div class="xf-profit-section-caption">Exception Transactions</div>', unsafe_allow_html=True)
@@ -767,7 +757,7 @@ with st.expander("C. 负毛利交易 / Negative Gross Profit Transactions", expa
     if negative.empty:
         st.caption("当前筛选范围内没有负毛利交易。")
     else:
-        st.dataframe(_style_profitability_table(_transaction_columns(negative.sort_values("Gross Profit").head(300))), width="stretch", hide_index=True)
+        _render_profitability_table(_transaction_columns(negative.sort_values("Gross Profit").head(300)))
 
 suspicious = suspicious_unit_comparison(filtered)
 with st.expander("D. 单位与价格疑点 / Suspicious Unit Comparison", expanded=True):
@@ -777,21 +767,21 @@ with st.expander("D. 单位与价格疑点 / Suspicious Unit Comparison", expand
         display = _transaction_columns(suspicious.head(500))
         if "Suspicion Reason" in suspicious.columns:
             display[_bilingual_label("异常原因", "Exception Reason")] = suspicious["Suspicion Reason"].head(500).to_list()
-        st.dataframe(_style_profitability_table(display), width="stretch", hide_index=True)
+        _render_profitability_table(display)
 
 invalid_cost = invalid_unit_cost_rows(filtered)
 with st.expander("E. 无效单位成本 / Invalid Unit Cost", expanded=True):
     if invalid_cost.empty:
         st.caption("当前筛选范围内没有 Invalid Unit Cost 行。")
     else:
-        st.dataframe(_style_profitability_table(_transaction_columns(invalid_cost.head(300))), width="stretch", hide_index=True)
+        _render_profitability_table(_transaction_columns(invalid_cost.head(300)))
 
 with st.expander("F. 产品毛利贡献核对 / Product Margin Reconciliation", expanded=True):
     reconciliation = product_margin_reconciliation(filtered)
     if reconciliation.empty:
         st.caption("当前筛选范围内没有产品贡献拆解。")
     else:
-        st.dataframe(_style_profitability_table(_format_table(reconciliation.head(50))), width="stretch", hide_index=True)
+        _render_profitability_table(reconciliation.head(50))
 
 with st.expander("成本覆盖报告 / Coverage Report", expanded=False):
     st.json(coverage)
