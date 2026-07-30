@@ -6,8 +6,10 @@ import hashlib
 from io import BytesIO
 import json
 import logging
+import os
 from pathlib import Path
 import secrets
+import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -102,6 +104,8 @@ ROLE_PERMISSIONS = {
     },
 }
 ROLE_LOOKUP = {role.casefold(): role for role in ROLE_PERMISSIONS}
+_OAUTH_STATE_CACHE_LOCK = threading.RLock()
+_APP_SESSION_STORE_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -260,21 +264,13 @@ def _auth_flow(*, redirect_uri: str | None = None, state: str | None = None, cod
 
 
 def _read_oauth_state_cache() -> dict[str, dict[str, str]]:
-    try:
-        raw = json.loads(OAUTH_STATE_CACHE_PATH.read_text())
-    except FileNotFoundError:
-        return {}
-    try:
-        return {str(key): value for key, value in raw.items() if isinstance(value, dict)}
-    except Exception:
-        return {}
+    with _OAUTH_STATE_CACHE_LOCK:
+        return _read_json_mapping_cache(OAUTH_STATE_CACHE_PATH, "OAuth state cache")
 
 
 def _write_oauth_state_cache(cache: dict[str, dict[str, str]]) -> None:
-    OAUTH_STATE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = OAUTH_STATE_CACHE_PATH.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(cache, separators=(",", ":"), sort_keys=True))
-    temp_path.replace(OAUTH_STATE_CACHE_PATH)
+    with _OAUTH_STATE_CACHE_LOCK:
+        _write_json_mapping_cache(OAUTH_STATE_CACHE_PATH, cache)
 
 
 def _valid_oauth_context(context: dict[str, str]) -> dict[str, str] | None:
@@ -296,35 +292,51 @@ def _valid_oauth_context(context: dict[str, str]) -> dict[str, str] | None:
 
 
 def _store_oauth_context(context: dict[str, str]) -> None:
-    cache = _read_oauth_state_cache()
-    now = int(time.time())
-    cache = {
-        state: stored
-        for state, stored in cache.items()
-        if _valid_oauth_context(stored) is not None
-    }
-    cache[context["state"]] = {**context, "created_at": str(now)}
-    _write_oauth_state_cache(cache)
+    with _OAUTH_STATE_CACHE_LOCK:
+        cache = _read_oauth_state_cache()
+        now = int(time.time())
+        cache = {
+            state: stored
+            for state, stored in cache.items()
+            if _valid_oauth_context(stored) is not None
+        }
+        cache[context["state"]] = {**context, "created_at": str(now)}
+        _write_oauth_state_cache(cache)
 
 
 def _consume_oauth_context(state: str) -> dict[str, str] | None:
-    cache = _read_oauth_state_cache()
-    stored = cache.pop(state, None)
-    cleaned_cache = {
-        stored_state: stored_context
-        for stored_state, stored_context in cache.items()
-        if _valid_oauth_context(stored_context) is not None
-    }
-    _write_oauth_state_cache(cleaned_cache)
+    with _OAUTH_STATE_CACHE_LOCK:
+        cache = _read_oauth_state_cache()
+        stored = cache.pop(state, None)
+        cleaned_cache = {
+            stored_state: stored_context
+            for stored_state, stored_context in cache.items()
+            if _valid_oauth_context(stored_context) is not None
+        }
+        _write_oauth_state_cache(cleaned_cache)
     if stored is None:
         return None
     return _valid_oauth_context(stored)
 
 
 def _read_app_sessions() -> dict[str, dict[str, str]]:
+    with _APP_SESSION_STORE_LOCK:
+        return _read_json_mapping_cache(APP_SESSION_STORE_PATH, "Auth session cache")
+
+
+def _write_app_sessions(sessions: dict[str, dict[str, str]]) -> None:
+    with _APP_SESSION_STORE_LOCK:
+        _write_json_mapping_cache(APP_SESSION_STORE_PATH, sessions)
+
+
+def _read_json_mapping_cache(path: Path, label: str) -> dict[str, dict[str, str]]:
     try:
-        raw = json.loads(APP_SESSION_STORE_PATH.read_text())
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
+        return {}
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        logger.warning("%s is unreadable or corrupted; resetting cache", label)
+        _delete_corrupted_cache(path, label)
         return {}
     try:
         return {str(key): value for key, value in raw.items() if isinstance(value, dict)}
@@ -332,11 +344,22 @@ def _read_app_sessions() -> dict[str, dict[str, str]]:
         return {}
 
 
-def _write_app_sessions(sessions: dict[str, dict[str, str]]) -> None:
-    APP_SESSION_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = APP_SESSION_STORE_PATH.with_suffix(".tmp")
-    temp_path.write_text(json.dumps(sessions, separators=(",", ":"), sort_keys=True))
-    temp_path.replace(APP_SESSION_STORE_PATH)
+def _delete_corrupted_cache(path: Path, label: str) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("%s could not be removed after corruption was detected", label)
+
+
+def _write_json_mapping_cache(path: Path, data: dict[str, dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    payload = json.dumps(data, separators=(",", ":"), sort_keys=True)
+    with temp_path.open("w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
 
 
 def _hash_session_token(token: str) -> str:
@@ -366,18 +389,19 @@ def _create_app_session(user: AuthUser) -> str:
     token = secrets.token_urlsafe(32)
     token_hash = _hash_session_token(token)
     now = int(time.time())
-    sessions = _clean_app_sessions()
-    sessions[token_hash] = {
-        "token_hash": token_hash,
-        "user_email": user.email,
-        "user_name": user.name,
-        "user_role": user.role,
-        "google_sub": user.google_sub,
-        "created_at": str(now),
-        "expires_at": str(now + APP_SESSION_TTL_SECONDS),
-        "last_seen_at": str(now),
-    }
-    _write_app_sessions(sessions)
+    with _APP_SESSION_STORE_LOCK:
+        sessions = _clean_app_sessions()
+        sessions[token_hash] = {
+            "token_hash": token_hash,
+            "user_email": user.email,
+            "user_name": user.name,
+            "user_role": user.role,
+            "google_sub": user.google_sub,
+            "created_at": str(now),
+            "expires_at": str(now + APP_SESSION_TTL_SECONDS),
+            "last_seen_at": str(now),
+        }
+        _write_app_sessions(sessions)
     return token
 
 
@@ -385,27 +409,29 @@ def _delete_app_session(token: str) -> None:
     if not token:
         return
     token_hash = _hash_session_token(token)
-    sessions = _read_app_sessions()
-    if token_hash in sessions:
-        sessions.pop(token_hash, None)
-        _write_app_sessions(_clean_app_sessions(sessions))
+    with _APP_SESSION_STORE_LOCK:
+        sessions = _read_app_sessions()
+        if token_hash in sessions:
+            sessions.pop(token_hash, None)
+            _write_app_sessions(_clean_app_sessions(sessions))
 
 
 def _session_record_from_token(token: str) -> dict[str, str] | None:
     if not token:
         return None
     token_hash = _hash_session_token(token)
-    sessions = _clean_app_sessions()
-    record = sessions.get(token_hash)
-    if record is None:
-        if sessions != _read_app_sessions():
-            _write_app_sessions(sessions)
-        return None
-    now = int(time.time())
-    record["last_seen_at"] = str(now)
-    sessions[token_hash] = record
-    _write_app_sessions(sessions)
-    return record
+    with _APP_SESSION_STORE_LOCK:
+        sessions = _clean_app_sessions()
+        record = sessions.get(token_hash)
+        if record is None:
+            if sessions != _read_app_sessions():
+                _write_app_sessions(sessions)
+            return None
+        now = int(time.time())
+        record["last_seen_at"] = str(now)
+        sessions[token_hash] = record
+        _write_app_sessions(sessions)
+        return record
 
 
 def _restore_user_from_app_session() -> AuthUser | None:
