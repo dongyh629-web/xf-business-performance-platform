@@ -5,8 +5,6 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="客户分析", layout="wide")
-
 from app.auth import require_login
 from app.business_metrics import aggregate_customer_profitability, get_cached_business_metrics, profitability_kpis
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD

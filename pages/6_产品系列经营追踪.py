@@ -5,8 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="产品系列经营追踪", layout="wide")
-
 from app.auth import require_login
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.product_range_metrics import (

@@ -1,8 +1,6 @@
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="数据质量中心", layout="wide")
-
 from app.auth import require_login
 from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
