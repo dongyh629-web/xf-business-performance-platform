@@ -146,20 +146,28 @@ def render_home_page() -> None:
 home_page = st.Page(render_home_page, title="首页", default=True)
 sales_tracking_page = st.Page("pages/4_经营追踪.py", title="销售经营")
 product_range_page = st.Page("pages/6_产品系列经营追踪.py", title="产品系列")
+profitability_page = st.Page("pages/7_Profitability.py", title="Profitability")
 customer_analysis_page = st.Page("pages/2_客户分析.py", title="客户分析")
 customer_health_page = st.Page("pages/5_客户健康.py", title="客户健康")
 product_analysis_page = st.Page("pages/3_产品分析.py", title="产品分析")
 data_quality_page = st.Page("pages/1_数据质量中心.py", title="数据质量")
+data_validation_page = st.Page("pages/8_Data_Validation.py", title="Data Validation")
 
 pages = {"": [home_page]}
 if role_allows(auth_user.role, "sales"):
-    pages["📈 销售"] = [sales_tracking_page, product_range_page]
+    sales_pages = [sales_tracking_page, product_range_page]
+    if role_allows(auth_user.role, "margin"):
+        sales_pages.append(profitability_page)
+    pages["📈 销售"] = sales_pages
 if role_allows(auth_user.role, "customers"):
     pages["👥 客户"] = [customer_analysis_page, customer_health_page]
 if role_allows(auth_user.role, "products"):
     pages["📦 产品"] = [product_analysis_page]
 if role_allows(auth_user.role, "system"):
-    pages["⚙️ 系统"] = [data_quality_page]
+    system_pages = [data_quality_page]
+    if role_allows(auth_user.role, "data_validation"):
+        system_pages.append(data_validation_page)
+    pages["⚙️ 系统"] = system_pages
 
 current_page = st.navigation(pages, position="hidden")
 
@@ -173,6 +181,7 @@ NAV_GROUPS = [
         "items": [
             {"title": "销售经营", "english": "Sales Performance", "page": "pages/4_经营追踪.py"},
             {"title": "产品系列", "english": "Product Range", "page": "pages/6_产品系列经营追踪.py"},
+            {"title": "利润分析", "english": "Profitability", "page": "pages/7_Profitability.py", "permission": "margin"},
         ],
     },
     {
@@ -201,6 +210,7 @@ NAV_GROUPS = [
         "english": "System",
         "items": [
             {"title": "数据质量", "english": "Data Quality", "page": "pages/1_数据质量中心.py"},
+            {"title": "数据验证", "english": "Data Validation", "page": "pages/8_Data_Validation.py", "permission": "data_validation"},
         ],
     },
 ]
@@ -208,7 +218,12 @@ NAV_GROUPS = [
 
 def render_sidebar_navigation() -> None:
     current_title = getattr(current_page, "title", "首页")
-    visible_groups = [group for group in NAV_GROUPS if role_allows(auth_user.role, str(group["area"]))]
+    visible_groups = [
+        group
+        for group in NAV_GROUPS
+        if role_allows(auth_user.role, str(group["area"]))
+        and any(role_allows(auth_user.role, str(item.get("permission", group["area"]))) for item in group["items"])
+    ]
 
     with st.sidebar:
         brand_html = dedent(
@@ -241,10 +256,13 @@ def render_sidebar_navigation() -> None:
         st.markdown('<div class="xf-nav-divider"></div>', unsafe_allow_html=True)
         for group in visible_groups:
             group_key = str(group["key"])
-            is_current_group = any(item["title"] == current_title for item in group["items"])
+            visible_items = [
+                item for item in group["items"] if role_allows(auth_user.role, str(item.get("permission", group["area"])))
+            ]
+            is_current_group = any(item["title"] == current_title or item.get("english") == current_title for item in visible_items)
             with st.container(key=f"sidebar_group_row_{group_key}"):
                 with st.expander(f"{group['label']}  {group['english']}", expanded=is_current_group):
-                    for item in group["items"]:
+                    for item in visible_items:
                         safe_page_link(
                             str(item["page"]),
                             label=f"{item['title']} · {item['english']}",

@@ -16,6 +16,13 @@ import pandas as pd
 import streamlit as st
 
 from app.config import LINE_ID_CANDIDATES, METHODOLOGY_VERSION
+from app.cost_snapshots import (
+    CostFileMetadata,
+    CostSnapshot,
+    CostSnapshotRegistry,
+    build_cost_snapshot_registry,
+    load_cost_snapshot_from_bytes,
+)
 from app.data import ImportResult, import_excel
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
 
@@ -27,6 +34,7 @@ MANUAL_SOURCE_LABEL = "本次会话手动上传"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SALES_FOLDER_NAME = "sales data"
 TARGETS_FOLDER_NAME = "targets"
+COST_FOLDER_NAME = "Cost Data"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
 DRIVE_CACHE_VERSION = f"drive_cache_v4_{METHODOLOGY_VERSION}"
@@ -35,6 +43,7 @@ CACHE_METADATA_PATH = CACHE_DIR / "metadata.json"
 CACHE_SALES_PATH = CACHE_DIR / "sales_clean.parquet"
 CACHE_SALES_EXTRAS_PATH = CACHE_DIR / "sales_extras.pkl"
 CACHE_TARGETS_PATH = CACHE_DIR / "targets_clean.pkl"
+CACHE_COST_SNAPSHOTS_PATH = CACHE_DIR / "cost_snapshots.pkl"
 MERGED_SALES_FILE_NAME = "Google Drive 合并销售数据"
 
 
@@ -658,6 +667,28 @@ def list_drive_excel_candidates(service, root_folder_id: str, subfolder_name: st
     return candidates
 
 
+def list_drive_cost_snapshot_candidates(service, root_folder_id: str) -> CostSnapshotRegistry:
+    folder = find_drive_folder(service, root_folder_id, COST_FOLDER_NAME)
+    items = _list_drive_children(service, folder.file_id)
+    metadata = [
+        CostFileMetadata(
+            file_id=str(item.get("id", "")),
+            name=str(item.get("name", "")),
+            modified_time=item.get("modifiedTime"),
+            size=item.get("size"),
+        )
+        for item in items
+        if _is_excel_file_name(str(item.get("name", "")))
+    ]
+    registry = build_cost_snapshot_registry(metadata)
+    logger.info(
+        "Google Drive cost snapshot candidates folder=%s files=%s",
+        COST_FOLDER_NAME,
+        [entry.file_name for entry in registry.entries],
+    )
+    return registry
+
+
 def _sales_candidate_sort_key(candidate: DriveFileCandidate) -> tuple[pd.Timestamp, pd.Timestamp]:
     effective_date = candidate.filename_date
     if effective_date is None:
@@ -701,6 +732,82 @@ def _sales_manifest(candidates: list[DriveFileCandidate]) -> list[dict[str, Any]
 def _sales_manifest_signature(manifest: list[dict[str, Any]]) -> str:
     payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _cost_manifest(registry: CostSnapshotRegistry) -> list[dict[str, Any]]:
+    return [
+        {
+            "file_id": entry.file_id,
+            "name": entry.file_name,
+            "modified_time": entry.modified_time,
+            "size": entry.size,
+            "cost_version_date": _date_text(entry.cost_version_date),
+        }
+        for entry in registry.entries
+    ]
+
+
+def _cost_manifest_signature(manifest: list[dict[str, Any]]) -> str:
+    payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _restore_cost_snapshot_cache(manifest_signature: str | None = None) -> tuple[CostSnapshotRegistry, list[CostSnapshot]] | None:
+    start = _timer()
+    if not CACHE_COST_SNAPSHOTS_PATH.exists():
+        return None
+    try:
+        with CACHE_COST_SNAPSHOTS_PATH.open("rb") as handle:
+            payload = pickle.load(handle)
+        cache_signature = payload.get("manifest_signature")
+        if manifest_signature and cache_signature != manifest_signature:
+            return None
+        registry = payload.get("registry")
+        snapshots = payload.get("snapshots")
+        if not isinstance(registry, CostSnapshotRegistry) or not isinstance(snapshots, list):
+            return None
+        _perf_log("restore_cost_snapshots", start, len(snapshots), "hit")
+        return registry, snapshots
+    except Exception:
+        logger.exception("Local cost snapshot cache restore failed")
+        _perf_log("restore_cost_snapshots", start, cache="corrupt")
+        return None
+
+
+def _write_cost_snapshot_cache(
+    registry: CostSnapshotRegistry,
+    snapshots: list[CostSnapshot],
+    manifest: list[dict[str, Any]],
+    manifest_signature: str,
+) -> None:
+    start = _timer()
+    try:
+        _ensure_cache_dir()
+        with CACHE_COST_SNAPSHOTS_PATH.open("wb") as handle:
+            pickle.dump(
+                {
+                    "registry": registry,
+                    "snapshots": snapshots,
+                    "manifest": manifest,
+                    "manifest_signature": manifest_signature,
+                    "cache_created_at": _now_text(),
+                },
+                handle,
+            )
+        cache_metadata = _read_cache_metadata()
+        cache_metadata.update(
+            {
+                "cache_version": DRIVE_CACHE_VERSION,
+                "cost_manifest": manifest,
+                "cost_manifest_signature": manifest_signature,
+                "cost_snapshot_count": len(snapshots),
+                "cost_cache_created_at": _now_text(),
+            }
+        )
+        _write_cache_metadata(cache_metadata)
+        _perf_log("write_cost_snapshots", start, len(snapshots), "miss")
+    except Exception:
+        logger.exception("Local cost snapshot cache write failed")
 
 
 def _non_empty_count(series: pd.Series) -> int:
@@ -1320,6 +1427,48 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
     st.session_state["drive_load_status"] = status
     _perf_log("load_drive_business_files", start, len(st.session_state.get("clean_data", [])) if st.session_state.get("clean_data") is not None else None, "drive")
     return status
+
+
+def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry, list[CostSnapshot]]:
+    start = _timer()
+    config = get_drive_config()
+    service = get_drive_service(config)
+    registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
+    manifest = _cost_manifest(registry)
+    manifest_signature = _cost_manifest_signature(manifest)
+    if not force:
+        cached = _restore_cost_snapshot_cache(manifest_signature)
+        if cached is not None:
+            return cached
+
+    snapshots: list[CostSnapshot] = []
+    for entry in registry.entries:
+        if not entry.participates_in_matching:
+            continue
+        try:
+            content = download_drive_file(service, str(entry.file_id)).getvalue()
+            snapshot = load_cost_snapshot_from_bytes(content, entry)
+        except Exception as exc:
+            entry.validation_status = "Invalid"
+            entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
+            entry.participates_in_matching = False
+            logger.warning("Google Drive cost snapshot rejected file_name=%s reason=%s", entry.file_name, exc.__class__.__name__)
+            continue
+        entry.row_count = snapshot.registry_entry.row_count
+        entry.valid_sku_count = snapshot.registry_entry.valid_sku_count
+        entry.duplicate_sku_count = snapshot.registry_entry.duplicate_sku_count
+        entry.validation_status = snapshot.registry_entry.validation_status
+        entry.warnings.extend(snapshot.registry_entry.warnings)
+        entry.errors.extend(snapshot.registry_entry.errors)
+        entry.participates_in_matching = snapshot.registry_entry.participates_in_matching
+        if snapshot.registry_entry.participates_in_matching:
+            snapshots.append(snapshot)
+
+    manifest = _cost_manifest(registry)
+    manifest_signature = _cost_manifest_signature(manifest)
+    _write_cost_snapshot_cache(registry, snapshots, manifest, manifest_signature)
+    _perf_log("load_drive_cost_snapshots", start, len(snapshots), "drive")
+    return registry, snapshots
 
 
 def ensure_drive_data_loaded(force: bool = False) -> DriveLoadStatus:
