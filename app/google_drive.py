@@ -24,7 +24,7 @@ from app.cost_snapshots import (
     load_cost_snapshot_from_bytes,
 )
 from app.data import ImportResult, import_excel
-from app.google_transport import close_google_service, with_google_transport_retry
+from app.google_transport import GoogleHttpStatusError, close_google_service, with_google_transport_retry
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
 
 
@@ -119,6 +119,51 @@ class DriveFileCandidate:
     version: int | None
     year: int | None
     reason: str
+
+
+class DriveRestClient:
+    BASE_URL = "https://www.googleapis.com/drive/v3"
+    TIMEOUT = (5, 30)
+
+    def __init__(self, session):
+        self._session = session
+
+    def close(self) -> None:
+        self._session.close()
+
+    def _request_json(self, stage: str, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        def operation():
+            response = self._session.request(method, url, timeout=self.TIMEOUT, **kwargs)
+            if response.status_code >= 400:
+                raise GoogleHttpStatusError(response.status_code, stage)
+            if not response.content:
+                return {}
+            return response.json()
+
+        return with_google_transport_retry(stage, operation)
+
+    def _request_bytes(self, stage: str, method: str, url: str, **kwargs: Any) -> bytes:
+        def operation():
+            response = self._session.request(method, url, timeout=self.TIMEOUT, **kwargs)
+            if response.status_code >= 400:
+                raise GoogleHttpStatusError(response.status_code, stage)
+            return bytes(response.content)
+
+        return with_google_transport_retry(stage, operation)
+
+    def list_files(self, **params: Any) -> dict[str, Any]:
+        return self._request_json("drive_files_list", "GET", f"{self.BASE_URL}/files", params=params)
+
+    def get_file(self, file_id: str, **params: Any) -> dict[str, Any]:
+        return self._request_json("drive_file_get", "GET", f"{self.BASE_URL}/files/{file_id}", params=params)
+
+    def download_file(self, file_id: str) -> bytes:
+        return self._request_bytes(
+            "drive_file_download",
+            "GET",
+            f"{self.BASE_URL}/files/{file_id}",
+            params={"alt": "media", "supportsAllDrives": "true"},
+        )
 
 
 class _NamedBytesIO(BytesIO):
@@ -410,12 +455,10 @@ def get_drive_service(config: DriveConfig):
     try:
         from google.auth.exceptions import RefreshError
         from google.auth.transport.requests import Request
+        from google.auth.transport.requests import AuthorizedSession
         from google.oauth2.credentials import Credentials
-        from google_auth_httplib2 import AuthorizedHttp
-        from googleapiclient.discovery import build
-        import httplib2
     except ImportError as exc:
-        raise DriveUserError("缺少 Google Drive 读取依赖，请确认 requirements.txt 已安装 google-api-python-client 和 google-auth。") from exc
+        raise DriveUserError("缺少 Google Drive 读取依赖，请确认 requirements.txt 已安装 google-auth。") from exc
 
     try:
         credentials = Credentials(
@@ -427,8 +470,7 @@ def get_drive_service(config: DriveConfig):
             scopes=[DRIVE_SCOPE],
         )
         with_google_transport_retry("drive_credentials_refresh", lambda: credentials.refresh(Request()))
-        authorized_http = AuthorizedHttp(credentials, http=httplib2.Http(timeout=30))
-        return build("drive", "v3", http=authorized_http, cache_discovery=False)
+        return DriveRestClient(AuthorizedSession(credentials))
     except RefreshError as exc:
         logger.warning("Google OAuth refresh failed: %s", exc.__class__.__name__)
         text = str(exc).lower()
@@ -536,16 +578,15 @@ def _list_drive_children(service, folder_id: str, mime_type: str | None = None) 
     page_token = None
     try:
         while True:
-            request = service.files().list(
+            response = service.list_files(
                 q=" and ".join(query_parts),
                 fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,shortcutDetails)",
                 pageSize=100,
                 pageToken=page_token,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
+                supportsAllDrives="true",
+                includeItemsFromAllDrives="true",
                 corpora="allDrives",
             )
-            response = with_google_transport_retry("drive_children_list", request.execute)
             files.extend(response.get("files", []))
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -576,15 +617,14 @@ def find_drive_file(service, folder_id: str, file_name: str) -> DriveFileMetadat
         f"name = '{_escape_drive_query_value(file_name)}' and trashed = false"
     )
     try:
-        request = service.files().list(
+        response = service.list_files(
             q=query,
             fields="files(id,name,mimeType,modifiedTime,size,webViewLink)",
             pageSize=10,
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
+            supportsAllDrives="true",
+            includeItemsFromAllDrives="true",
             corpora="allDrives",
         )
-        response = with_google_transport_retry("drive_file_lookup", request.execute)
     except Exception as exc:
         logger.exception("Google Drive file lookup failed for file_name=%s", file_name)
         raise DriveUserError("Google Drive 文件查找失败，请检查 Drive API、folder_id 和文件夹权限。") from exc
@@ -1024,12 +1064,11 @@ def _analysis_year_from_session() -> int | None:
 
 def get_drive_file_metadata(service, file_id: str) -> DriveFileMetadata:
     try:
-        request = service.files().get(
-            fileId=file_id,
+        item = service.get_file(
+            file_id,
             fields="id,name,mimeType,modifiedTime,size,webViewLink",
-            supportsAllDrives=True,
+            supportsAllDrives="true",
         )
-        item = with_google_transport_retry("drive_file_metadata", request.execute)
     except Exception as exc:
         logger.exception("Google Drive metadata lookup failed file_id=%s", file_id)
         raise DriveUserError("Google Drive 文件 metadata 读取失败。") from exc
@@ -1045,17 +1084,7 @@ def get_drive_file_metadata(service, file_id: str) -> DriveFileMetadata:
 
 def download_drive_file(service, file_id: str) -> BytesIO:
     try:
-        from googleapiclient.http import MediaIoBaseDownload
-    except ImportError as exc:
-        raise DriveUserError("缺少 Google Drive 下载依赖 google-api-python-client。") from exc
-
-    output = BytesIO()
-    try:
-        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-        downloader = MediaIoBaseDownload(output, request)
-        done = False
-        while not done:
-            _, done = with_google_transport_retry("drive_file_download", downloader.next_chunk)
+        output = BytesIO(service.download_file(file_id))
     except Exception as exc:
         logger.exception("Google Drive file download failed file_id=%s", file_id)
         raise DriveUserError("Google Drive 文件下载失败，请检查文件权限和网络连接。") from exc

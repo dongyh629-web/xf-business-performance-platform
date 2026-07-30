@@ -16,10 +16,20 @@ T = TypeVar("T")
 RETRY_ATTEMPTS = 3
 RETRY_INITIAL_DELAY_SECONDS = 0.4
 RETRY_BACKOFF = 2.0
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+class GoogleHttpStatusError(RuntimeError):
+    def __init__(self, status_code: int, stage: str):
+        super().__init__(f"Google request failed stage={stage} status={status_code}")
+        self.status_code = status_code
+        self.stage = stage
 
 
 def is_retryable_google_transport_error(exc: BaseException) -> bool:
     """Return True for short-lived network failures that are safe to retry."""
+    if isinstance(exc, GoogleHttpStatusError):
+        return exc.status_code in RETRYABLE_HTTP_STATUS_CODES
     retryable_types: tuple[type[BaseException], ...] = (
         ssl.SSLError,
         socket.timeout,
@@ -103,7 +113,7 @@ def with_google_transport_retry(stage: str, operation: Callable[[], T], *, attem
 
 
 def close_google_service(service: object) -> None:
-    """Close a googleapiclient Resource transport when the installed version supports it."""
+    """Close a short-lived Google transport when the installed client supports it."""
     close = getattr(service, "close", None)
     if not callable(close):
         return
