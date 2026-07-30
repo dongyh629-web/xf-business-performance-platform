@@ -16,7 +16,7 @@ HIGH_QUANTITY_QUANTILE = 0.99
 VALIDATION_STATUS_OPTIONS = [
     "Pending",
     "Verified",
-    "Gift",
+    "Zero-value Outbound",
     "Unit Check",
     "Cost Check",
     "Pricing Check",
@@ -25,7 +25,10 @@ VALIDATION_STATUS_OPTIONS = [
 SIGN_OFF_CHECKLIST = [
     "历史成本快照已补齐",
     "Invalid Unit Cost 已确认",
-    "Gift / Free of Charge 规则已确认",
+    "零价出库分类规则已确认 / Zero-value outbound classification confirmed",
+    "仓库借用处理规则已确认 / Warehouse loan treatment confirmed",
+    "营销赠品成本归属已确认 / Marketing sample cost treatment confirmed",
+    "有偿销售毛利率口径已确认 / Commercial gross margin definition confirmed",
     "Unit Mapping 已确认",
     "Negative Margin 已抽样核查",
     "成本单位已确认",
@@ -58,17 +61,48 @@ def _costed_mask(data: pd.DataFrame) -> pd.Series:
 
 
 def gift_free_of_charge_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
+    return zero_value_outbound_rows(metrics_df)
+
+
+def zero_value_outbound_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
     sales = _numeric(metrics_df, "Sales Amount").fillna(0)
     quantity = _numeric(metrics_df, "Quantity").fillna(0)
-    return metrics_df.loc[sales.eq(0) & quantity.gt(0)].copy()
+    rows = metrics_df.loc[sales.eq(0) & quantity.gt(0)].copy()
+    if rows.empty:
+        return rows
+    if "Zero-value Reason" not in rows.columns:
+        rows["Zero-value Reason"] = "Unclassified"
+    rows["Zero-value Reason"] = rows["Zero-value Reason"].fillna("Unclassified").replace("", "Unclassified")
+    if "Zero-value Validation Status" not in rows.columns:
+        rows["Zero-value Validation Status"] = "Pending Business Review"
+    rows["Zero-value Validation Status"] = rows["Zero-value Validation Status"].fillna("Pending Business Review").replace("", "Pending Business Review")
+    if "Zero-value Recommended Action" not in rows.columns:
+        rows["Zero-value Recommended Action"] = (
+            "请确认该记录属于营销赠品、客户补偿、仓库借用、内部领用、库存报损或数据错误。"
+        )
+    rows["Zero-value Recommended Action"] = rows["Zero-value Recommended Action"].fillna(
+        "请确认该记录属于营销赠品、客户补偿、仓库借用、内部领用、库存报损或数据错误。"
+    )
+    return rows
 
 
 def gift_free_of_charge_summary(metrics_df: pd.DataFrame) -> dict[str, float | int]:
-    gifts = gift_free_of_charge_rows(metrics_df)
+    summary = zero_value_outbound_summary(metrics_df)
     return {
-        "Gift Rows": int(len(gifts)),
-        "Gift Sales": float(_numeric(gifts, "Sales Amount").fillna(0).sum()),
-        "Gift Cost": float(_numeric(gifts, "Total Cost").fillna(0).sum()),
+        "Gift Rows": summary["Zero-value Rows"],
+        "Gift Sales": summary["Zero-value Sales"],
+        "Gift Cost": summary["Zero-value Outbound Cost"],
+    }
+
+
+def zero_value_outbound_summary(metrics_df: pd.DataFrame) -> dict[str, float | int]:
+    zero_rows = zero_value_outbound_rows(metrics_df)
+    reason = zero_rows.get("Zero-value Reason", pd.Series("", index=zero_rows.index)).astype("string")
+    return {
+        "Zero-value Rows": int(len(zero_rows)),
+        "Zero-value Sales": float(_numeric(zero_rows, "Sales Amount").fillna(0).sum()),
+        "Zero-value Outbound Cost": float(_numeric(zero_rows, "Total Cost").fillna(0).sum()),
+        "Unclassified Rows": int(reason.fillna("Unclassified").eq("Unclassified").sum()),
     }
 
 
@@ -98,7 +132,7 @@ def unit_validation_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
         if pd.notna(quantity.loc[idx]) and float(quantity.loc[idx]) % 1 != 0:
             row_reasons.append("Fractional Quantity")
         if pd.notna(sales.loc[idx]) and sales.loc[idx] == 0:
-            row_reasons.append("Sales Amount = 0")
+            row_reasons.append("Zero-value Outbound")
         if high_cost_threshold and pd.notna(unit_cost.loc[idx]) and unit_cost.loc[idx] >= high_cost_threshold:
             row_reasons.append("Unit Cost high")
         reasons.append("; ".join(row_reasons))
@@ -184,7 +218,7 @@ def add_business_validation_status(metrics_df: pd.DataFrame) -> pd.DataFrame:
     unit_risk = unit_validation_rows(data)
     data.loc[status.isin(["Invalid Unit Cost", "Missing Product Cost", "No Cost Version"]), "Business Validation Status"] = "Cost Check"
     data.loc[unit_risk.index, "Business Validation Status"] = "Unit Check"
-    data.loc[sales.eq(0) & quantity.gt(0), "Business Validation Status"] = "Gift"
+    data.loc[sales.eq(0) & quantity.gt(0), "Business Validation Status"] = "Zero-value Outbound"
     return data
 
 
@@ -208,7 +242,7 @@ def top_exceptions(metrics_df: pd.DataFrame, limit: int = 20) -> dict[str, pd.Da
     invalid_cost = data.loc[status.eq("Invalid Unit Cost")].assign(_sales=sales).sort_values("_sales", ascending=False).head(limit)
     missing_cost = data.loc[status.isin(["Missing Product Cost", "No Cost Version"])].assign(_sales=sales).sort_values("_sales", ascending=False).head(limit)
     suspicious = unit_risk.assign(_sales=sales.reindex(unit_risk.index)).sort_values("_sales", ascending=False).head(limit)
-    zero_sales = data.loc[sales.eq(0)].assign(_quantity=_numeric(data, "Quantity")).sort_values("_quantity", ascending=False).head(limit)
+    zero_sales = zero_value_outbound_rows(data).assign(_quantity=_numeric(data, "Quantity")).sort_values("_quantity", ascending=False).head(limit)
     return {
         "Top Negative Margin Products": negative_products,
         "Top Invalid Unit Cost": invalid_cost,
@@ -222,8 +256,13 @@ def profitability_readiness_score(metrics_df: pd.DataFrame) -> ProfitabilityRead
     coverage = coverage_summary(metrics_df)
     total_rows = max(int(coverage["Total Rows"]), 1)
     total_sales = float(coverage["Total Sales"])
-    gift_rows = len(gift_free_of_charge_rows(metrics_df))
-    unit_risk_rows = len(unit_validation_rows(metrics_df))
+    zero_summary = zero_value_outbound_summary(metrics_df)
+    unclassified_zero_rows = int(zero_summary["Unclassified Rows"])
+    unit_risk = unit_validation_rows(metrics_df)
+    if not unit_risk.empty:
+        unit_sales = _numeric(unit_risk, "Sales Amount").fillna(0)
+        unit_risk = unit_risk.loc[unit_sales.ne(0)]
+    unit_risk_rows = len(unit_risk)
     status = metrics_df.get("Cost Match Status", pd.Series("", index=metrics_df.index)).astype("string")
     invalid_cost_rows = int(status.eq("Invalid Unit Cost").sum())
     missing_cost_sales = float(_numeric(metrics_df.loc[status.isin(["Missing Product Cost", "No Cost Version"])], "Sales Amount").fillna(0).sum())
@@ -231,7 +270,7 @@ def profitability_readiness_score(metrics_df: pd.DataFrame) -> ProfitabilityRead
     cost_coverage_score = min(float(coverage["Sales Coverage"]) / READINESS_TARGET_COST_COVERAGE, 1.0) * 45
     unit_risk_rate = unit_risk_rows / total_rows
     invalid_cost_rate = invalid_cost_rows / total_rows
-    gift_rate = gift_rows / total_rows
+    gift_rate = unclassified_zero_rows / total_rows
     missing_cost_rate = missing_cost_sales / total_sales if total_sales else 0.0
 
     unit_score = max(0.0, 1 - unit_risk_rate / READINESS_TARGET_UNIT_RISK) * 20
@@ -252,7 +291,7 @@ def profitability_readiness_score(metrics_df: pd.DataFrame) -> ProfitabilityRead
             "Sales Coverage": float(coverage["Sales Coverage"]),
             "Unit Risk Rate": float(unit_risk_rate),
             "Invalid Cost Rate": float(invalid_cost_rate),
-            "Gift Row Rate": float(gift_rate),
+            "Unclassified Zero-value Row Rate": float(gift_rate),
             "Missing Cost Sales Rate": float(missing_cost_rate),
         },
     )

@@ -12,7 +12,9 @@ from app.business_metrics import (
     build_business_metrics_dataframe,
     calculate_cost_coverage,
     cost_coverage_report,
+    monthly_profitability,
     negative_gross_profit_transactions,
+    profitability_kpis,
     suspicious_unit_comparison,
 )
 from app.cost_snapshots import load_cost_snapshot
@@ -45,6 +47,56 @@ class BusinessMetricsTests(unittest.TestCase):
         self.assertEqual(8.0, metrics.loc[0, "Total Cost"])
         self.assertEqual(-8.0, metrics.loc[0, "Gross Profit"])
         self.assertTrue(pd.isna(metrics.loc[0, "Margin %"]))
+        self.assertEqual("Unclassified", metrics.loc[0, "Zero-value Reason"])
+        self.assertEqual("Pending Business Review", metrics.loc[0, "Zero-value Validation Status"])
+
+    def test_commercial_profitability_excludes_zero_value_cost_from_margin(self) -> None:
+        snapshot = _snapshot(
+            [
+                {"Product Code": "A", "Unit Cost": 7, "Effective From": "2026-07-01"},
+                {"Product Code": "B", "Unit Cost": 10, "Effective From": "2026-07-01"},
+            ]
+        )
+        sales = pd.DataFrame(
+            {
+                "Completed Date": pd.to_datetime(["2026-07-02", "2026-07-02"]),
+                "Product Code": ["A", "B"],
+                "Quantity": [100, 10],
+                "Sales Amount": [1000, 0],
+            }
+        )
+        metrics = build_business_metrics_dataframe(sales, [snapshot])
+        kpis = profitability_kpis(metrics)
+        self.assertEqual(1000.0, kpis["Commercial Sales"])
+        self.assertEqual(700.0, kpis["Commercial Cost"])
+        self.assertEqual(300.0, kpis["Commercial Gross Profit"])
+        self.assertAlmostEqual(0.30, kpis["Commercial Gross Margin"])
+        self.assertEqual(100.0, kpis["Zero-value Outbound Cost"])
+        self.assertEqual(200.0, kpis["Contribution After Zero-value Cost"])
+        self.assertNotAlmostEqual(0.20, kpis["Commercial Gross Margin"])
+        self.assertEqual(2, len(metrics))
+
+        trend = monthly_profitability(metrics)
+        self.assertEqual(100.0, float(trend.loc[0, "Zero-value Outbound Cost"]))
+        self.assertAlmostEqual(0.30, float(trend.loc[0, "Commercial Gross Margin"]))
+
+    def test_warehouse_loan_zero_value_does_not_enter_commercial_margin(self) -> None:
+        snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 10, "Effective From": "2026-07-01"}])
+        sales = pd.DataFrame(
+            {
+                "Completed Date": [pd.Timestamp("2026-07-02")],
+                "Product Code": ["A"],
+                "Quantity": [3],
+                "Sales Amount": [0],
+                "Zero-value Reason": ["Warehouse Loan"],
+            }
+        )
+        metrics = build_business_metrics_dataframe(sales, [snapshot])
+        metrics.loc[0, "Zero-value Reason"] = "Warehouse Loan"
+        kpis = profitability_kpis(metrics)
+        self.assertEqual(0.0, kpis["Commercial Sales"])
+        self.assertIsNone(kpis["Commercial Gross Margin"])
+        self.assertEqual(30.0, kpis["Zero-value Outbound Cost"])
 
     def test_quantity_zero_keeps_profit_empty(self) -> None:
         snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Effective From": "2026-07-01"}])
@@ -202,7 +254,7 @@ class BusinessMetricsTests(unittest.TestCase):
         suspicious = suspicious_unit_comparison(metrics)
         reason = suspicious.iloc[0]["Suspicion Reason"]
         self.assertIn("Fractional Quantity", reason)
-        self.assertIn("Sales Amount = 0", reason)
+        self.assertIn("Zero-value Outbound", reason)
 
     def test_future_metric_columns_are_reserved(self) -> None:
         snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Effective From": "2026-07-01"}])

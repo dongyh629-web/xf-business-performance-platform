@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 import pandas as pd
@@ -18,6 +19,8 @@ from app.data_validation import (
     profitability_readiness_score,
     top_exceptions,
     unit_validation_rows,
+    zero_value_outbound_rows,
+    zero_value_outbound_summary,
 )
 
 
@@ -44,14 +47,18 @@ def _metrics() -> pd.DataFrame:
 
 
 class DataValidationTests(unittest.TestCase):
-    def test_gift_free_of_charge_validation(self) -> None:
+    def test_zero_value_outbound_validation(self) -> None:
         metrics = _metrics()
-        gifts = gift_free_of_charge_rows(metrics)
-        self.assertEqual(["P2"], gifts["Product Code"].tolist())
-        summary = gift_free_of_charge_summary(metrics)
-        self.assertEqual(1, summary["Gift Rows"])
-        self.assertEqual(0.0, summary["Gift Sales"])
-        self.assertEqual(6.0, summary["Gift Cost"])
+        zero_rows = zero_value_outbound_rows(metrics)
+        self.assertEqual(["P2"], zero_rows["Product Code"].tolist())
+        self.assertEqual("Unclassified", zero_rows.iloc[0]["Zero-value Reason"])
+        summary = zero_value_outbound_summary(metrics)
+        self.assertEqual(1, summary["Zero-value Rows"])
+        self.assertEqual(0.0, summary["Zero-value Sales"])
+        self.assertEqual(6.0, summary["Zero-value Outbound Cost"])
+        self.assertEqual(1, summary["Unclassified Rows"])
+        legacy = gift_free_of_charge_summary(metrics)
+        self.assertEqual(1, legacy["Gift Rows"])
 
     def test_unit_validation_flags_expected_reasons(self) -> None:
         flagged = unit_validation_rows(_metrics())
@@ -60,7 +67,7 @@ class DataValidationTests(unittest.TestCase):
         self.assertIn("Margin < 0%", reasons)
         self.assertIn("Margin < 10%", reasons)
         self.assertIn("Fractional Quantity", reasons)
-        self.assertIn("Sales Amount = 0", reasons)
+        self.assertIn("Zero-value Outbound", reasons)
         self.assertIn("Quantity outlier", reasons)
         self.assertIn("Unit Cost high", reasons)
 
@@ -87,7 +94,7 @@ class DataValidationTests(unittest.TestCase):
 
     def test_business_validation_statuses(self) -> None:
         result = add_business_validation_status(_metrics())
-        self.assertEqual("Gift", result.loc[1, "Business Validation Status"])
+        self.assertEqual("Zero-value Outbound", result.loc[1, "Business Validation Status"])
         self.assertEqual("Unit Check", result.loc[2, "Business Validation Status"])
         self.assertEqual("Cost Check", result.loc[4, "Business Validation Status"])
 
@@ -103,14 +110,33 @@ class DataValidationTests(unittest.TestCase):
         self.assertLess(score.score, 85)
         self.assertIn(score.grade, {"Needs Review", "Not Ready"})
         self.assertIn("Sales Coverage", score.details)
+        self.assertIn("Unclassified Zero-value Row Rate", score.details)
         self.assertIn("Pending", VALIDATION_STATUS_OPTIONS)
+        self.assertIn("Zero-value Outbound", VALIDATION_STATUS_OPTIONS)
         self.assertTrue(any("成本单位" in item for item in SIGN_OFF_CHECKLIST))
+        self.assertTrue(any("零价出库分类规则" in item for item in SIGN_OFF_CHECKLIST))
 
     def test_data_validation_permission_is_internal(self) -> None:
         self.assertTrue(has_permission("data_validation", "Admin"))
         self.assertTrue(has_permission("data_validation", "Finance"))
         self.assertFalse(has_permission("data_validation", "Sales"))
         self.assertFalse(has_permission("data_validation", "Executive"))
+
+    def test_data_validation_page_has_bilingual_main_sections(self) -> None:
+        source = Path("pages/8_Data_Validation.py").read_text(encoding="utf-8")
+        for text in [
+            "数据验证",
+            "Data Validation",
+            "零价出库验证",
+            "Zero-value Outbound Validation",
+            "单位验证",
+            "Unit Validation",
+            "成本覆盖分析",
+            "Cost Coverage Analysis",
+            "业务签核清单",
+            "Business Sign-off Checklist",
+        ]:
+            self.assertIn(text, source)
 
 
 if __name__ == "__main__":

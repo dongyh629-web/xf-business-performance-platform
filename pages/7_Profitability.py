@@ -68,7 +68,13 @@ COLUMN_LABELS = {
     "Unit Cost": _bilingual_label("单位成本", "Unit Cost"),
     "Total Cost": _bilingual_label("总成本", "Total Cost"),
     "Gross Profit": _bilingual_label("毛利", "Gross Profit"),
-    "Weighted Margin": _bilingual_label("加权毛利率", "Weighted Margin"),
+    "Weighted Margin": _bilingual_label("有偿销售毛利率", "Commercial Gross Margin"),
+    "Commercial Sales": _bilingual_label("有偿销售额", "Commercial Sales"),
+    "Commercial Cost": _bilingual_label("有偿销售成本", "Commercial Cost"),
+    "Commercial Gross Profit": _bilingual_label("有偿销售毛利", "Commercial Gross Profit"),
+    "Commercial Gross Margin": _bilingual_label("有偿销售毛利率", "Commercial Gross Margin"),
+    "Zero-value Outbound Cost": _bilingual_label("零价出库成本", "Zero-value Outbound Cost"),
+    "Contribution After Zero-value Cost": _bilingual_label("扣除零价出库后的经营贡献", "Contribution After Zero-value Cost"),
     "Margin %": _bilingual_label("毛利率", "Margin %"),
     "Cost Coverage": _bilingual_label("成本覆盖率", "Cost Coverage"),
     "Cost to Sales Ratio": _bilingual_label("成本销售比", "Cost to Sales"),
@@ -165,10 +171,12 @@ def _render_notice(kpis: dict[str, float | None]) -> None:
             <div class="xf-profit-card-subtitle">Business Notice</div>
             <div class="xf-profit-card-body">
                 当前成本覆盖率：<strong>{escape(coverage_text)}</strong><br>
-                由于历史成本尚未全部补齐，当前利润仅代表已匹配成本销售，不能作为整体经营利润。
+                由于历史成本尚未全部补齐，当前利润仅代表已匹配成本销售，不能作为整体经营利润。<br>
+                零价出库不计入有偿销售毛利率，但相关商品成本不会被忽略。营销赠品、客户补偿、仓库借用及其他零价出库将在数据验证页面中单独核查。
             </div>
             <div class="xf-profit-card-body-en">
                 Current profitability is calculated only for sales matched with available cost snapshots.
+                Zero-value outbound transactions are excluded from commercial gross margin, while their product costs remain visible for validation and contribution analysis.
             </div>
         </div>
         """,
@@ -179,11 +187,17 @@ def _render_notice(kpis: dict[str, float | None]) -> None:
 def _render_kpis(kpis: dict[str, float | None]) -> None:
     cards = [
         ("销售总额", "Total Sales", _money_compact(kpis["Total Sales"]), False),
-        ("已匹配成本销售额", "Costed Sales", _money_compact(kpis["Costed Sales"]), False),
-        ("毛利", "Gross Profit", _money_compact(kpis["Gross Profit"]), True),
-        ("加权毛利率", "Weighted Margin", _percent_or_na(kpis["Weighted Margin"]), True),
+        ("有偿销售额", "Commercial Sales", _money_compact(kpis["Commercial Sales"]), False),
+        ("有偿销售毛利", "Commercial Gross Profit", _money_compact(kpis["Commercial Gross Profit"]), True),
+        ("有偿销售毛利率", "Commercial Gross Margin", _percent_or_na(kpis["Commercial Gross Margin"]), True),
+        ("零价出库成本", "Zero-value Outbound Cost", _money_compact(kpis["Zero-value Outbound Cost"]), True),
+        (
+            "扣除零价出库后的经营贡献",
+            "Contribution After Zero-value Cost",
+            _money_compact(kpis["Contribution After Zero-value Cost"]),
+            True,
+        ),
         ("成本覆盖率", "Cost Coverage", _percent_or_na(kpis["Cost Coverage"]), True),
-        ("未匹配成本销售额", "Uncosted Sales", _money_compact(kpis["Uncosted Sales"]), False),
     ]
     html = []
     for chinese, english, value, featured in cards:
@@ -202,7 +216,9 @@ def _render_interpretation(kpis: dict[str, float | None]) -> None:
     coverage_text = _percent_or_na(kpis.get("Cost Coverage"))
     costed_sales = _money_or_na(kpis.get("Costed Sales"))
     uncosted_sales = _money_or_na(kpis.get("Uncosted Sales"))
-    margin_text = _percent_or_na(kpis.get("Weighted Margin"))
+    margin_text = _percent_or_na(kpis.get("Commercial Gross Margin"))
+    zero_cost = _money_or_na(kpis.get("Zero-value Outbound Cost"))
+    contribution = _money_or_na(kpis.get("Contribution After Zero-value Cost"))
     st.markdown(
         f"""
         <div class="xf-profit-interpretation">
@@ -211,11 +227,13 @@ def _render_interpretation(kpis: dict[str, float | None]) -> None:
             <div class="xf-profit-card-body">
                 当前成本覆盖率为 <strong>{escape(coverage_text)}</strong>，目前利润只能覆盖 <strong>{escape(coverage_text)}</strong> 的销售额。<br>
                 已匹配成本销售额为 <strong>{escape(costed_sales)}</strong>，未匹配成本销售额为 <strong>{escape(uncosted_sales)}</strong>。<br>
-                当前已匹配销售的加权毛利率为 <strong>{escape(margin_text)}</strong>。<br>
+                当前有偿销售毛利率为 <strong>{escape(margin_text)}</strong>。<br>
+                零价出库成本为 <strong>{escape(zero_cost)}</strong>，扣除后的经营贡献为 <strong>{escape(contribution)}</strong>。<br>
                 建议先补齐历史成本快照，再进行经营决策。
             </div>
             <div class="xf-profit-card-body-en">
                 Current profitability covers only the sales matched with cost snapshots.
+                Commercial gross margin excludes zero-value outbound transactions; their costs remain visible and are deducted from contribution.
                 Please complete historical cost snapshots before using profitability for business decisions.
             </div>
         </div>
@@ -307,6 +325,8 @@ def _format_percent_columns(table: pd.DataFrame, columns: list[str]) -> pd.DataF
 
 def _format_table(table: pd.DataFrame) -> pd.DataFrame:
     display = table.copy()
+    if "Weighted Margin" in display.columns and "Commercial Gross Margin" in display.columns:
+        display = display.drop(columns=["Weighted Margin"])
     money_columns = [
         "Sales Amount",
         "Costed Sales",
@@ -315,10 +335,16 @@ def _format_table(table: pd.DataFrame) -> pd.DataFrame:
         "Unit Cost",
         "Total Cost",
         "Gross Profit",
+        "Commercial Sales",
+        "Commercial Cost",
+        "Commercial Gross Profit",
+        "Zero-value Outbound Cost",
+        "Contribution After Zero-value Cost",
         "Matched Sales Amount",
     ]
     percent_columns = [
         "Weighted Margin",
+        "Commercial Gross Margin",
         "Margin %",
         "Cost Coverage",
         "Cost to Sales Ratio",
@@ -336,9 +362,10 @@ def _format_table(table: pd.DataFrame) -> pd.DataFrame:
 def _amount_trend_chart(trend: pd.DataFrame):
     fig = go.Figure()
     series = [
-        ("Total Sales", "销售总额 / Total Sales", "#FFC72C"),
-        ("Costed Sales", "已匹配成本销售额 / Costed Sales", "#374151"),
-        ("Gross Profit", "毛利 / Gross Profit", "#2E8B57"),
+        ("Commercial Sales", "有偿销售额 / Commercial Sales", "#FFC72C"),
+        ("Commercial Gross Profit", "有偿销售毛利 / Commercial Gross Profit", "#2E8B57"),
+        ("Zero-value Outbound Cost", "零价出库成本 / Zero-value Outbound Cost", "#8B93A1"),
+        ("Contribution After Zero-value Cost", "扣除零价出库后的经营贡献 / Contribution After Zero-value Cost", "#374151"),
     ]
     for column, label, color in series:
         fig.add_trace(go.Scatter(x=trend["Month"], y=trend[column], mode="lines+markers", name=label, line=dict(color=color)))
@@ -350,7 +377,7 @@ def _amount_trend_chart(trend: pd.DataFrame):
 def _ratio_trend_chart(trend: pd.DataFrame):
     fig = go.Figure()
     series = [
-        ("Weighted Margin", "加权毛利率 / Weighted Margin", "#2E8B57"),
+        ("Commercial Gross Margin", "有偿销售毛利率 / Commercial Gross Margin", "#2E8B57"),
         ("Cost Coverage", "成本覆盖率 / Cost Coverage", "#8B93A1"),
     ]
     for column, label, color in series:
@@ -372,6 +399,9 @@ def _transaction_columns(data: pd.DataFrame) -> pd.DataFrame:
         "Unit Cost",
         "Total Cost",
         "Gross Profit",
+        "Commercial Gross Profit",
+        "Commercial Gross Margin",
+        "Zero-value Outbound Cost",
         "Margin %",
         "Cost File Name",
         "Cost Match Status",
@@ -419,7 +449,9 @@ with st.expander("数据口径说明 / Calculation Method", expanded=False):
 
         未匹配成本的销售不会参与利润计算。
 
-        毛利率仅代表已匹配成本销售。
+        有偿销售毛利率仅基于 Sales Amount > 0 的销售计算。
+
+        零价出库不会稀释有偿销售毛利率，但其成本会单独反映，并从经营贡献中扣除。
 
         ---
 
@@ -429,7 +461,9 @@ with st.expander("数据口径说明 / Calculation Method", expanded=False):
 
         Sales without matched costs are retained, but excluded from profit calculation.
 
-        Margin represents only sales matched with valid costs.
+        Commercial gross margin is calculated only from Sales Amount > 0 transactions.
+
+        Zero-value outbound transactions do not dilute commercial gross margin, but their costs remain visible and are deducted from contribution.
         """
     )
     if registry is not None:
@@ -463,8 +497,8 @@ if product_table.empty:
 else:
     sort_options = {
         "销售额 / Sales": "Sales Amount",
-        "毛利 / Gross Profit": "Gross Profit",
-        "毛利率 / Weighted Margin": "Weighted Margin",
+        "有偿销售毛利 / Commercial Gross Profit": "Commercial Gross Profit",
+        "有偿销售毛利率 / Commercial Gross Margin": "Commercial Gross Margin",
         "成本覆盖率 / Cost Coverage": "Cost Coverage",
     }
     sort_option = st.selectbox(
@@ -473,7 +507,7 @@ else:
         index=0,
     )
     sort_column = sort_options[sort_option]
-    ascending = sort_column in ["Weighted Margin", "Cost Coverage"]
+    ascending = sort_column in ["Commercial Gross Margin", "Cost Coverage"]
     sorted_product_table = product_table.sort_values(sort_column, ascending=ascending, na_position="last")
     st.dataframe(_format_table(sorted_product_table.head(200)), width="stretch", hide_index=True)
 
@@ -497,7 +531,7 @@ section_header("毛利核对")
 st.markdown('<div class="xf-profit-section-caption">Margin Reconciliation</div>', unsafe_allow_html=True)
 if not product_table.empty:
     with st.expander("A. 低毛利产品 / Lowest Margin Products", expanded=True):
-        lowest = product_table[product_table["Weighted Margin"].notna()].sort_values("Weighted Margin", ascending=True).head(30)
+        lowest = product_table[product_table["Commercial Gross Margin"].notna()].sort_values("Commercial Gross Margin", ascending=True).head(30)
         st.dataframe(_format_table(lowest), width="stretch", hide_index=True)
 
     with st.expander("B. 高成本销售比产品 / Highest Cost-to-Sales Products", expanded=False):
