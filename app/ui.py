@@ -853,11 +853,22 @@ def _first_valid_date(df: pd.DataFrame, col: str):
 
 def _reset_filter_state(key_prefix: str, min_date, max_date) -> None:
     st.session_state["date_basis"] = "Completed Date"
-    st.session_state[f"{key_prefix}_date_range"] = (min_date, max_date) if min_date and max_date else None
+    st.session_state[f"{key_prefix}_date_range"] = current_data_year_range(min_date, max_date)
     st.session_state[f"{key_prefix}_all_customer_types"] = True
     st.session_state[f"{key_prefix}_all_product_groups"] = True
     st.session_state[f"{key_prefix}_selected_customer_types"] = []
     st.session_state[f"{key_prefix}_selected_product_groups"] = []
+
+
+def current_data_year_range(min_date, max_date):
+    if not min_date or not max_date:
+        return None
+    latest = pd.Timestamp(max_date).date()
+    earliest = pd.Timestamp(min_date).date()
+    start = date(latest.year, 1, 1)
+    if start < earliest:
+        start = earliest
+    return start, latest
 
 
 def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
@@ -888,9 +899,10 @@ def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
     with st.sidebar:
         st.markdown("### 筛选")
         if pd.notna(min_date) and pd.notna(max_date):
+            default_range = current_data_year_range(min_date.date(), max_date.date())
             selected_range = st.date_input(
                 "日期范围",
-                value=(min_date.date(), max_date.date()),
+                value=default_range,
                 min_value=min_date.date(),
                 max_value=max_date.date(),
                 key=f"{key_prefix}_date_range",

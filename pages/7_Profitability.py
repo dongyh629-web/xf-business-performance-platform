@@ -30,7 +30,7 @@ from app.profitability_table_styles import (
     status_cell_style,
     zero_value_cost_style,
 )
-from app.ui import inject_global_styles, money, percent, section_header, style_plotly
+from app.ui import current_data_year_range, inject_global_styles, money, percent, section_header, style_plotly
 
 
 LOGGER = logging.getLogger(__name__)
@@ -271,7 +271,7 @@ def _completed_date_filter(data: pd.DataFrame) -> pd.DataFrame:
         if pd.notna(min_date) and pd.notna(max_date):
             selected = st.date_input(
                 "完成日期范围 / Completed Date",
-                value=(min_date.date(), max_date.date()),
+                value=current_data_year_range(min_date.date(), max_date.date()),
                 min_value=min_date.date(),
                 max_value=max_date.date(),
                 key="profitability_completed_date_range",

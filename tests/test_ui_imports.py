@@ -4,6 +4,7 @@ import ast
 import importlib
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 
 
@@ -66,6 +67,22 @@ class UiImportCompatibilityTest(unittest.TestCase):
                 missing[str(path.relative_to(PROJECT_ROOT))] = absent
 
         self.assertEqual({}, missing)
+
+    def test_current_data_year_range_uses_latest_data_year(self) -> None:
+        ui = importlib.import_module("app.ui")
+
+        self.assertEqual(
+            (date(2026, 1, 1), date(2026, 7, 30)),
+            ui.current_data_year_range(date(2024, 1, 1), date(2026, 7, 30)),
+        )
+
+    def test_current_data_year_range_respects_available_minimum(self) -> None:
+        ui = importlib.import_module("app.ui")
+
+        self.assertEqual(
+            (date(2026, 3, 15), date(2026, 7, 30)),
+            ui.current_data_year_range(date(2026, 3, 15), date(2026, 7, 30)),
+        )
 
 
 if __name__ == "__main__":
