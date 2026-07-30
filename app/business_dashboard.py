@@ -376,9 +376,11 @@ def _target_excel_for_anchor(df: pd.DataFrame) -> DashboardTargetSelection:
     )
 
 
-def business_status(metrics: BusinessDashboardMetrics) -> tuple[str, str]:
-    if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
+def business_status(metrics: BusinessDashboardMetrics, targets: DashboardTargetSelection | None = None) -> tuple[str, str]:
+    if targets is not None and not targets.has_monthly_target:
         return "未读取到目标数据", "info"
+    if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
+        return "尚未设置目标", "info"
     if metrics.monthly_completion >= 1:
         return "领先目标节奏", "success"
     if metrics.pace_gap >= PACE_NORMAL_BAND:
@@ -388,9 +390,11 @@ def business_status(metrics: BusinessDashboardMetrics) -> tuple[str, str]:
     return "落后目标节奏", "warning"
 
 
-def generate_business_summary(metrics: BusinessDashboardMetrics) -> str:
-    if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
+def generate_business_summary(metrics: BusinessDashboardMetrics, targets: DashboardTargetSelection | None = None) -> str:
+    if targets is not None and not targets.has_monthly_target:
         return "未读取到目标数据。请检查 Google Drive 中的 Target 文件。"
+    if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
+        return "当前月度目标为 0，无法查看完成率和 Pace。"
 
     if metrics.monthly_completion >= 1:
         over_target = max(metrics.monthly_sales - metrics.monthly_target, 0.0)
@@ -531,7 +535,23 @@ def _render_trend(value: float | None, text: str) -> str:
     return f'<div class="xf-trend {_trend_class(value)}">{escape(text)}</div>'
 
 
-def _render_executive_kpis(metrics: BusinessDashboardMetrics) -> None:
+def _target_caption(targets: DashboardTargetSelection) -> str:
+    return f"目标：{money(targets.monthly_target)}" if targets.has_monthly_target else "目标：未读取到目标"
+
+
+def _remaining_caption(metrics: BusinessDashboardMetrics, targets: DashboardTargetSelection) -> str:
+    return f"剩余目标：{money(metrics.monthly_remaining_target)}" if targets.has_monthly_target else "剩余目标：N/A"
+
+
+def _target_percent(value: float | None, has_target: bool) -> str:
+    return _format_percent(value) if has_target else "无基准"
+
+
+def _target_money(value: float, has_target: bool) -> str:
+    return money(value) if has_target else "N/A"
+
+
+def _render_executive_kpis(metrics: BusinessDashboardMetrics, targets: DashboardTargetSelection) -> None:
     kpis = [
         {
             "label": "本周销售额",
@@ -546,20 +566,20 @@ def _render_executive_kpis(metrics: BusinessDashboardMetrics) -> None:
             "value": money(metrics.monthly_sales),
             "trend_value": metrics.monthly_yoy,
             "trend_text": _trend_text(metrics.monthly_yoy, "同比 "),
-            "caption": f"目标：{money(metrics.monthly_target)}",
+            "caption": _target_caption(targets),
             "featured": False,
         },
         {
             "label": "本月目标完成率",
-            "value": _format_percent(metrics.monthly_completion),
+            "value": _target_percent(metrics.monthly_completion, targets.has_monthly_target),
             "trend_value": metrics.pace_gap,
-            "trend_text": _points_trend_text(metrics.pace_gap, "Pace "),
-            "caption": f"剩余目标：{money(metrics.monthly_remaining_target)}",
+            "trend_text": _points_trend_text(metrics.pace_gap, "Pace ") if targets.has_monthly_target else "Pace 无基准",
+            "caption": _remaining_caption(metrics, targets),
             "featured": True,
         },
         {
             "label": "Pace 差值",
-            "value": _format_signed_points(metrics.pace_gap),
+            "value": _format_signed_points(metrics.pace_gap) if targets.has_monthly_target else "无基准",
             "trend_value": metrics.pace_gap,
             "trend_text": f"工作日进度 {_format_percent(metrics.workday_progress)}",
             "caption": "目标完成率 - 工作日进度",
@@ -689,39 +709,46 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
 
     _render_dashboard_header(metrics, basis_label, _scope_text(df))
 
-    status_text, status_level = business_status(metrics)
-    _render_business_alert("当前经营状态", f"{status_text}。{generate_business_summary(metrics)}", status_level)
+    status_text, status_level = business_status(metrics, targets)
+    _render_business_alert("当前经营状态", f"{status_text}。{generate_business_summary(metrics, targets)}", status_level)
     if targets.message:
         st.warning(f"⚠️ {targets.message}")
 
     section_header("销售与目标进度")
-    _render_executive_kpis(metrics)
+    _render_executive_kpis(metrics, targets)
 
     st.divider()
     st.markdown("#### 年度经营")
     _render_summary_cards(
         [
             {"label": "年度累计销售额", "value": money(metrics.annual_sales)},
-            {"label": "年度完成率", "value": _format_percent(metrics.annual_completion), "featured": True},
+            {"label": "年度完成率", "value": _target_percent(metrics.annual_completion, targets.has_annual_target), "featured": True},
             {"label": "年度累计同比", "value": _format_percent(metrics.annual_ytd_yoy)},
-            {"label": "年度剩余目标", "value": money(metrics.annual_remaining_target)},
+            {"label": "年度剩余目标", "value": _target_money(metrics.annual_remaining_target, targets.has_annual_target)},
         ]
     )
 
     st.divider()
     st.markdown("#### 行动指标")
     action_cols = st.columns(3)
-    action_cols[0].metric("剩余目标", money(metrics.monthly_remaining_target))
+    action_cols[0].metric("剩余目标", _target_money(metrics.monthly_remaining_target, targets.has_monthly_target))
     action_cols[1].metric("剩余工作日", f"{metrics.remaining_workdays} 天")
+    required_daily = (
+        "N/A"
+        if not targets.has_monthly_target
+        else "已达标"
+        if metrics.monthly_remaining_target == 0 and metrics.monthly_target > 0
+        else money(metrics.required_daily_sales or 0.0)
+    )
     action_cols[2].metric(
         "达标所需日均销售额",
-        "已达标" if metrics.monthly_remaining_target == 0 and metrics.monthly_target > 0 else money(metrics.required_daily_sales or 0.0),
+        required_daily,
     )
 
     progress_cols = st.columns(2)
     with progress_cols[0]:
         st.caption("本月销售进度")
-        st.progress(_progress(metrics.monthly_completion), text=_format_percent(metrics.monthly_completion))
+        st.progress(_progress(metrics.monthly_completion), text=_target_percent(metrics.monthly_completion, targets.has_monthly_target))
     with progress_cols[1]:
         st.caption("工作日进度")
         st.progress(_progress(metrics.workday_progress), text=_format_percent(metrics.workday_progress))

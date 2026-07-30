@@ -32,8 +32,12 @@ logger = logging.getLogger(__name__)
 DRIVE_SOURCE_LABEL = "Google Drive"
 MANUAL_SOURCE_LABEL = "本次会话手动上传"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
 SALES_FOLDER_NAME = "sales data"
-TARGETS_FOLDER_NAMES = ("targets data", "targets")
+SALES_FOLDER_NAMES = ("sales data", "sales")
+TARGETS_FOLDER_NAMES = ("targets data", "target data", "targets", "target")
+COST_FOLDER_NAMES = ("cost data", "costs data", "cost", "costs")
 COST_FOLDER_NAME = "Cost Data"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
@@ -533,7 +537,7 @@ def _list_drive_children(service, folder_id: str, mime_type: str | None = None) 
                 service.files()
                 .list(
                     q=" and ".join(query_parts),
-                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink)",
+                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,shortcutDetails)",
                     pageSize=100,
                     pageToken=page_token,
                     supportsAllDrives=True,
@@ -553,11 +557,14 @@ def _list_drive_children(service, folder_id: str, mime_type: str | None = None) 
 
 
 def _metadata_from_drive_item(item: dict[str, Any], fallback_name: str) -> DriveFileMetadata:
+    shortcut = item.get("shortcutDetails") or {}
+    file_id = str(shortcut.get("targetId") or item.get("id"))
+    mime_type = shortcut.get("targetMimeType") or item.get("mimeType")
     return DriveFileMetadata(
-        file_id=str(item.get("id")),
+        file_id=file_id,
         name=str(item.get("name", fallback_name)),
         modified_time=item.get("modifiedTime"),
-        mime_type=item.get("mimeType"),
+        mime_type=mime_type,
         size=item.get("size"),
         web_view_link=item.get("webViewLink"),
     )
@@ -606,47 +613,68 @@ def find_drive_file(service, folder_id: str, file_name: str) -> DriveFileMetadat
     return _metadata_from_drive_item(item, file_name)
 
 
-def find_drive_folder(service, parent_folder_id: str, folder_name: str) -> DriveFileMetadata:
-    query = (
-        f"'{_escape_drive_query_value(parent_folder_id)}' in parents and "
-        f"name = '{_escape_drive_query_value(folder_name)}' and "
-        "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    )
+def _is_drive_folder_or_folder_shortcut(item: dict[str, Any]) -> bool:
+    if item.get("mimeType") == FOLDER_MIME_TYPE:
+        return True
+    shortcut = item.get("shortcutDetails") or {}
+    return item.get("mimeType") == SHORTCUT_MIME_TYPE and shortcut.get("targetMimeType") == FOLDER_MIME_TYPE
+
+
+def _folder_display_name(item: dict[str, Any]) -> str:
+    name = str(item.get("name", "")).strip()
+    if item.get("mimeType") == SHORTCUT_MIME_TYPE:
+        return f"{name} (shortcut)"
+    return name
+
+
+def _visible_folder_names(children: list[dict[str, Any]]) -> list[str]:
+    return [_folder_display_name(item) for item in children if _is_drive_folder_or_folder_shortcut(item)]
+
+
+def _find_folder_item_from_children(children: list[dict[str, Any]], folder_names: tuple[str, ...]) -> dict[str, Any] | None:
+    normalized_targets = {_normalize_drive_name(name) for name in folder_names}
+    matches = [
+        item
+        for item in children
+        if _is_drive_folder_or_folder_shortcut(item)
+        and _normalize_drive_name(str(item.get("name", ""))) in normalized_targets
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=lambda item: item.get("modifiedTime", ""), reverse=True)[0]
+
+
+def find_drive_folder_from_aliases(
+    service,
+    parent_folder_id: str,
+    folder_type: str,
+    folder_names: tuple[str, ...],
+) -> DriveFileMetadata:
     try:
-        response = (
-            service.files()
-            .list(
-                q=query,
-                fields="files(id,name,mimeType,modifiedTime,webViewLink)",
-                pageSize=10,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-                corpora="allDrives",
-            )
-            .execute()
-        )
-    except Exception as exc:
-        logger.exception("Google Drive folder lookup failed for folder_name=%s", folder_name)
-        raise DriveUserError("Google Drive 子文件夹查找失败，请检查文件夹权限。") from exc
-    folders = response.get("files", [])
-    if not folders:
-        children = _list_drive_children(service, parent_folder_id, "application/vnd.google-apps.folder")
-        child_names = [str(item.get("name", "")) for item in children if item.get("name")]
-        logger.info("Google Drive folders visible in root folder: %s", child_names)
-        normalized_target = _normalize_drive_name(folder_name)
-        normalized_matches = [
-            item for item in children if _normalize_drive_name(str(item.get("name", ""))) == normalized_target
-        ]
-        if normalized_matches:
-            folders = normalized_matches
-        else:
-            logger.info("Google Drive subfolder not found folder_name=%s", folder_name)
-    if not folders:
-        raise DriveUserError(f"Google Drive 文件夹中未找到子文件夹：{folder_name}。")
-    folders = sorted(folders, key=lambda item: item.get("modifiedTime", ""), reverse=True)
-    item = folders[0]
-    logger.info("Google Drive subfolder selected name=%s", item.get("name", folder_name))
-    return _metadata_from_drive_item(item, folder_name)
+        children = _list_drive_children(service, parent_folder_id)
+    except DriveUserError as exc:
+        raise DriveUserError(f"{folder_type} 子文件夹查找失败，请检查文件夹权限。") from exc
+
+    child_names = _visible_folder_names(children)
+    logger.info(
+        "Google Drive folder discovery type=%s tried=%s visible=%s",
+        folder_type,
+        list(folder_names),
+        child_names,
+    )
+    item = _find_folder_item_from_children(children, folder_names)
+    if item is None:
+        tried = " / ".join(folder_names)
+        visible = " / ".join(child_names) if child_names else "未发现直接子文件夹"
+        raise DriveUserError(f"{folder_type} 子文件夹未找到。尝试名称：{tried}。实际发现：{visible}。")
+
+    metadata = _metadata_from_drive_item(item, str(item.get("name", folder_names[0])))
+    logger.info("Google Drive subfolder selected type=%s name=%s", folder_type, metadata.name)
+    return metadata
+
+
+def find_drive_folder(service, parent_folder_id: str, folder_name: str) -> DriveFileMetadata:
+    return find_drive_folder_from_aliases(service, parent_folder_id, "Google Drive", (folder_name,))
 
 
 def find_drive_file_in_folder_path(
@@ -688,24 +716,19 @@ def list_drive_excel_candidates(service, root_folder_id: str, subfolder_name: st
 def list_drive_excel_candidates_from_folders(
     service,
     root_folder_id: str,
+    folder_type: str,
     subfolder_names: tuple[str, ...],
 ) -> list[DriveFileCandidate]:
-    errors: list[str] = []
-    for folder_name in subfolder_names:
-        try:
-            candidates = list_drive_excel_candidates(service, root_folder_id, folder_name)
-        except DriveUserError as exc:
-            errors.append(str(exc))
-            continue
-        if candidates:
-            return candidates
-    if errors:
-        raise DriveUserError("；".join(errors))
-    return []
+    folder = find_drive_folder_from_aliases(service, root_folder_id, folder_type, subfolder_names)
+    items = _list_drive_children(service, folder.file_id)
+    candidates = [candidate for item in items if (candidate := _drive_candidate_from_item(item)) is not None]
+    candidate_names = [candidate.metadata.name for candidate in candidates]
+    logger.info("Google Drive Excel candidates folder=%s files=%s", folder.name, candidate_names)
+    return candidates
 
 
 def list_drive_cost_snapshot_candidates(service, root_folder_id: str) -> CostSnapshotRegistry:
-    folder = find_drive_folder(service, root_folder_id, COST_FOLDER_NAME)
+    folder = find_drive_folder_from_aliases(service, root_folder_id, "Cost Data", COST_FOLDER_NAMES)
     items = _list_drive_children(service, folder.file_id)
     metadata = [
         CostFileMetadata(
@@ -1179,7 +1202,7 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
     ):
         return DriveLoadItemStatus("skipped", "当前会话已手动上传销售数据，优先使用手动上传。")
     try:
-        raw_candidates = list_drive_excel_candidates(service, config.folder_id, SALES_FOLDER_NAME)
+        raw_candidates = list_drive_excel_candidates_from_folders(service, config.folder_id, "Sales Data", SALES_FOLDER_NAMES)
         _log_sales_candidates("scanned", raw_candidates)
         candidates = sorted_sales_candidates(raw_candidates)
         _log_sales_candidates("sorted", candidates)
@@ -1346,7 +1369,7 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
     analysis_year = _analysis_year_from_session()
     try:
         candidates = sorted_target_candidates(
-            list_drive_excel_candidates_from_folders(service, config.folder_id, TARGETS_FOLDER_NAMES),
+            list_drive_excel_candidates_from_folders(service, config.folder_id, "Targets Data", TARGETS_FOLDER_NAMES),
             analysis_year,
         )
     except DriveUserError:

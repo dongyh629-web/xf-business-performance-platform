@@ -37,6 +37,8 @@ class DriveRefreshTransactionTests(unittest.TestCase):
                 "clean_data": pd.DataFrame({"Sales Amount": [100.0]}),
                 "drive_sales_status": "旧销售",
                 "drive_sales_row_count": 1,
+                "target_data": pd.DataFrame({"Year": [2026], "Month": [7], "Revised Target": [180693.0]}),
+                "drive_target_status": "旧目标",
                 "cost_snapshot_registry": "old_registry",
                 "cost_snapshots": ["old_cost"],
                 "drive_cost_load_status": DriveLoadItemStatus("loaded", "old cost"),
@@ -116,6 +118,15 @@ class DriveRefreshTransactionTests(unittest.TestCase):
         self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
         self.assertEqual(1, self.fake_st.session_state["drive_cost_snapshot_count"])
         self.assertNotEqual(0, len(self.fake_st.session_state["cost_snapshots"]))
+
+    def test_target_failure_keeps_previous_target_data(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=lambda force=True: self._cost_success()), patch.object(
+            google_drive, "load_drive_business_files", return_value=_status("loaded")
+        ):
+            _status_result, message = google_drive.refresh_drive_data_transaction()
+
+        self.assertIn("目标失败", message)
+        self.assertEqual(180693.0, float(self.fake_st.session_state["target_data"]["Revised Target"].iloc[0]))
 
 
 if __name__ == "__main__":
