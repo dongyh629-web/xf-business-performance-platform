@@ -155,19 +155,21 @@ data_validation_page = st.Page("pages/8_Data_Validation.py", title="Data Validat
 
 pages = {"": [home_page]}
 if role_allows(auth_user.role, "sales"):
-    sales_pages = [sales_tracking_page, product_range_page]
-    if role_allows(auth_user.role, "margin"):
-        sales_pages.append(profitability_page)
-    pages["📈 销售"] = sales_pages
+    pages["📈 销售"] = [sales_tracking_page, product_range_page]
 if role_allows(auth_user.role, "customers"):
     pages["👥 客户"] = [customer_analysis_page, customer_health_page]
 if role_allows(auth_user.role, "products"):
     pages["📦 产品"] = [product_analysis_page]
-if role_allows(auth_user.role, "system"):
-    system_pages = [data_quality_page]
+if role_allows(auth_user.role, "finance"):
+    profit_pages = []
+    if role_allows(auth_user.role, "margin"):
+        profit_pages.append(profitability_page)
     if role_allows(auth_user.role, "data_validation"):
-        system_pages.append(data_validation_page)
-    pages["⚙️ 系统"] = system_pages
+        profit_pages.append(data_validation_page)
+    if profit_pages:
+        pages["💰 利润"] = profit_pages
+if role_allows(auth_user.role, "system"):
+    pages["⚙️ 系统"] = [data_quality_page]
 
 current_page = st.navigation(pages, position="hidden")
 
@@ -181,7 +183,6 @@ NAV_GROUPS = [
         "items": [
             {"title": "销售经营", "english": "Sales Performance", "page": "pages/4_经营追踪.py"},
             {"title": "产品系列", "english": "Product Range", "page": "pages/6_产品系列经营追踪.py"},
-            {"title": "利润分析", "english": "Profitability", "page": "pages/7_Profitability.py", "permission": "margin"},
         ],
     },
     {
@@ -204,13 +205,22 @@ NAV_GROUPS = [
         ],
     },
     {
+        "key": "profitability",
+        "area": "finance",
+        "label": "利润",
+        "english": "Profitability",
+        "items": [
+            {"title": "利润分析", "english": "Profitability", "page": "pages/7_Profitability.py", "permission": "margin"},
+            {"title": "数据验证", "english": "Data Validation", "page": "pages/8_Data_Validation.py", "permission": "data_validation"},
+        ],
+    },
+    {
         "key": "system",
         "area": "system",
         "label": "系统",
         "english": "System",
         "items": [
             {"title": "数据质量", "english": "Data Quality", "page": "pages/1_数据质量中心.py"},
-            {"title": "数据验证", "english": "Data Validation", "page": "pages/8_Data_Validation.py", "permission": "data_validation"},
         ],
     },
 ]
