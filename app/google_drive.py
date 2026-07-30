@@ -24,7 +24,7 @@ from app.cost_snapshots import (
     load_cost_snapshot_from_bytes,
 )
 from app.data import ImportResult, import_excel
-from app.google_transport import GoogleHttpStatusError, close_google_service, with_google_transport_retry
+from app.google_transport import GoogleHttpStatusError, close_google_service, google_auth_request, stage_timer, with_google_transport_retry
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
 
 
@@ -400,6 +400,40 @@ def _restore_any_local_cache() -> DriveLoadStatus | None:
     return DriveLoadStatus(True, "当前使用本地缓存数据。", sales_status, target_status)
 
 
+def restore_drive_data_from_cache() -> DriveLoadStatus | None:
+    st = _get_streamlit()
+    if st.session_state.get("clean_data") is not None:
+        status = st.session_state.get("drive_load_status")
+        if isinstance(status, DriveLoadStatus):
+            return status
+        return DriveLoadStatus(
+            True,
+            "业务数据已加载。",
+            DriveLoadItemStatus("loaded", "销售数据已加载。"),
+            DriveLoadItemStatus("loaded" if st.session_state.get("target_data") is not None else "failed", "目标数据已加载。"),
+        )
+    with stage_timer("sales_load") as sales_done:
+        cached = _restore_any_local_cache()
+        clean = st.session_state.get("clean_data")
+        sales_done(rows=len(clean) if clean is not None else None, status="local-cache" if cached is not None else "not-loaded")
+    if cached is not None:
+        target_data = st.session_state.get("target_data")
+        with stage_timer("targets_load") as target_done:
+            target_done(rows=len(target_data) if target_data is not None else None, status="local-cache")
+        st.session_state["drive_load_status"] = cached
+        return cached
+    status = DriveLoadStatus(
+        True,
+        "尚未同步业务数据。",
+        DriveLoadItemStatus("not_loaded", "尚未加载销售数据。"),
+        DriveLoadItemStatus("not_loaded", "尚未加载目标数据。"),
+    )
+    st.session_state["drive_load_status"] = status
+    st.session_state["drive_sales_status"] = "尚未同步"
+    st.session_state["drive_target_status"] = "尚未同步"
+    return status
+
+
 def _get_streamlit():
     import streamlit as st
 
@@ -454,7 +488,6 @@ def get_drive_config(secrets: Any | None = None) -> DriveConfig:
 def get_drive_service(config: DriveConfig):
     try:
         from google.auth.exceptions import RefreshError
-        from google.auth.transport.requests import Request
         from google.auth.transport.requests import AuthorizedSession
         from google.oauth2.credentials import Credentials
     except ImportError as exc:
@@ -469,8 +502,11 @@ def get_drive_service(config: DriveConfig):
             client_secret=config.client_secret,
             scopes=[DRIVE_SCOPE],
         )
-        with_google_transport_retry("drive_credentials_refresh", lambda: credentials.refresh(Request()))
-        return DriveRestClient(AuthorizedSession(credentials))
+        with stage_timer("google_drive_initialization") as done:
+            with_google_transport_retry("drive_credentials_refresh", lambda: credentials.refresh(google_auth_request(timeout=20)))
+            client = DriveRestClient(AuthorizedSession(credentials))
+            done()
+            return client
     except RefreshError as exc:
         logger.warning("Google OAuth refresh failed: %s", exc.__class__.__name__)
         text = str(exc).lower()
@@ -576,8 +612,17 @@ def _list_drive_children(service, folder_id: str, mime_type: str | None = None) 
         query_parts.append(f"mimeType = '{_escape_drive_query_value(mime_type)}'")
     files: list[dict[str, Any]] = []
     page_token = None
+    seen_page_tokens: set[str] = set()
+    page_count = 0
     try:
         while True:
+            if page_token:
+                if page_token in seen_page_tokens:
+                    raise DriveUserError("Google Drive 分页响应重复，已停止读取以避免长时间等待。")
+                seen_page_tokens.add(page_token)
+            page_count += 1
+            if page_count > 50:
+                raise DriveUserError("Google Drive 文件夹分页过多，已停止读取以避免长时间等待。")
             response = service.list_files(
                 q=" and ".join(query_parts),
                 fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,shortcutDetails)",
@@ -1466,8 +1511,14 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
     st = _get_streamlit()
     start = _timer()
     if not force and st.session_state.get("clean_data") is None:
-        cached = _restore_any_local_cache()
+        with stage_timer("sales_load") as sales_done:
+            cached = _restore_any_local_cache()
+            clean = st.session_state.get("clean_data")
+            sales_done(rows=len(clean) if clean is not None else None, status="local-cache" if cached is not None else "cache-miss")
         if cached is not None:
+            target_data = st.session_state.get("target_data")
+            with stage_timer("targets_load") as target_done:
+                target_done(rows=len(target_data) if target_data is not None else None, status="local-cache")
             st.session_state["drive_load_status"] = cached
             _perf_log("load_drive_business_files", start, len(st.session_state.get("clean_data", [])), "local-cache")
             return cached
@@ -1509,12 +1560,18 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
 
     try:
         try:
-            sales_status = _load_sales_file(service, config, force)
+            with stage_timer("sales_load") as done:
+                sales_status = _load_sales_file(service, config, force)
+                clean = st.session_state.get("clean_data")
+                done(rows=len(clean) if clean is not None else None, status=sales_status.status)
         except DriveUserError as exc:
             sales_status = _status_from_error(str(exc))
 
         try:
-            target_status = _load_target_file(service, config, force)
+            with stage_timer("targets_load") as done:
+                target_status = _load_target_file(service, config, force)
+                target_data = st.session_state.get("target_data")
+                done(rows=len(target_data) if target_data is not None else None, status=target_status.status)
         except DriveUserError as exc:
             target_status = _status_from_error(str(exc))
     finally:
@@ -1538,14 +1595,26 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
         registry, snapshots = session_cost
         _perf_log("load_drive_cost_snapshots", start, len(snapshots), "session")
         return registry, snapshots
+    if not force:
+        cached = _restore_cost_snapshot_cache()
+        if cached is not None:
+            _set_session_cost_snapshots(cached[0], cached[1], "cached", "成本快照已从本地缓存加载。")
+            _perf_log("load_drive_cost_snapshots", start, len(cached[1]), "local-cache")
+            return cached
+        registry = CostSnapshotRegistry([])
+        _set_session_cost_snapshots(registry, [], "not_loaded", "尚未加载成本快照。请点击刷新 Google Drive 数据。")
+        _perf_log("load_drive_cost_snapshots", start, 0, "not-loaded")
+        return registry, []
 
     try:
         config = get_drive_config()
-        service = get_drive_service(config)
-        try:
-            registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
-        finally:
-            close_google_service(service)
+        with stage_timer("cost_snapshot_load") as done:
+            service = get_drive_service(config)
+            try:
+                registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
+                done(rows=len(registry.entries), status="registry")
+            finally:
+                close_google_service(service)
     except DriveUserError as exc:
         if session_cost is not None:
             registry, snapshots = session_cost
@@ -1569,27 +1638,29 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
     snapshots: list[CostSnapshot] = []
     service = get_drive_service(config)
     try:
-        for entry in registry.entries:
-            if not entry.participates_in_matching:
-                continue
-            try:
-                content = download_drive_file(service, str(entry.file_id)).getvalue()
-                snapshot = load_cost_snapshot_from_bytes(content, entry)
-            except Exception as exc:
-                entry.validation_status = "Invalid"
-                entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
-                entry.participates_in_matching = False
-                logger.warning("Google Drive cost snapshot rejected file_name=%s reason=%s", entry.file_name, exc.__class__.__name__)
-                continue
-            entry.row_count = snapshot.registry_entry.row_count
-            entry.valid_sku_count = snapshot.registry_entry.valid_sku_count
-            entry.duplicate_sku_count = snapshot.registry_entry.duplicate_sku_count
-            entry.validation_status = snapshot.registry_entry.validation_status
-            entry.warnings.extend(snapshot.registry_entry.warnings)
-            entry.errors.extend(snapshot.registry_entry.errors)
-            entry.participates_in_matching = snapshot.registry_entry.participates_in_matching
-            if snapshot.registry_entry.participates_in_matching:
-                snapshots.append(snapshot)
+        with stage_timer("cost_snapshot_load") as done:
+            for entry in registry.entries:
+                if not entry.participates_in_matching:
+                    continue
+                try:
+                    content = download_drive_file(service, str(entry.file_id)).getvalue()
+                    snapshot = load_cost_snapshot_from_bytes(content, entry)
+                except Exception as exc:
+                    entry.validation_status = "Invalid"
+                    entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
+                    entry.participates_in_matching = False
+                    logger.warning("Google Drive cost snapshot rejected file_name=%s reason=%s", entry.file_name, exc.__class__.__name__)
+                    continue
+                entry.row_count = snapshot.registry_entry.row_count
+                entry.valid_sku_count = snapshot.registry_entry.valid_sku_count
+                entry.duplicate_sku_count = snapshot.registry_entry.duplicate_sku_count
+                entry.validation_status = snapshot.registry_entry.validation_status
+                entry.warnings.extend(snapshot.registry_entry.warnings)
+                entry.errors.extend(snapshot.registry_entry.errors)
+                entry.participates_in_matching = snapshot.registry_entry.participates_in_matching
+                if snapshot.registry_entry.participates_in_matching:
+                    snapshots.append(snapshot)
+            done(rows=len(snapshots), status="loaded")
     finally:
         close_google_service(service)
 
@@ -1614,17 +1685,20 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
 
 def ensure_drive_data_loaded(force: bool = False) -> DriveLoadStatus:
     st = _get_streamlit()
-    if not force and st.session_state.get("drive_auto_load_attempted"):
-        status = st.session_state.get("drive_load_status")
-        if isinstance(status, DriveLoadStatus):
-            return status
+    if not force:
+        if st.session_state.get("drive_cache_restore_attempted"):
+            status = st.session_state.get("drive_load_status")
+            if isinstance(status, DriveLoadStatus):
+                return status
+        st.session_state["drive_cache_restore_attempted"] = True
+        return restore_drive_data_from_cache()
     st.session_state["drive_auto_load_attempted"] = True
     return load_drive_business_files(force=force)
 
 
 def clear_drive_state() -> None:
     st = _get_streamlit()
-    for key in ["drive_auto_load_attempted", "drive_load_status"]:
+    for key in ["drive_auto_load_attempted", "drive_cache_restore_attempted", "drive_load_status"]:
         st.session_state.pop(key, None)
     try:
         st.cache_data.clear()

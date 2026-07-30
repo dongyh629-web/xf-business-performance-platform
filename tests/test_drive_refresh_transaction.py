@@ -129,5 +129,52 @@ class DriveRefreshTransactionTests(unittest.TestCase):
         self.assertEqual(180693.0, float(self.fake_st.session_state["target_data"]["Revised Target"].iloc[0]))
 
 
+class DriveStartupLoadingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.fake_st = _FakeStreamlit()
+        self.streamlit_patch = patch.object(google_drive, "_get_streamlit", return_value=self.fake_st)
+        self.streamlit_patch.start()
+
+    def tearDown(self) -> None:
+        self.streamlit_patch.stop()
+
+    def test_startup_without_cache_does_not_call_drive_sync(self) -> None:
+        with patch.object(google_drive, "_restore_any_local_cache", return_value=None), patch.object(
+            google_drive, "load_drive_business_files"
+        ) as loader:
+            status = google_drive.ensure_drive_data_loaded(force=False)
+
+        loader.assert_not_called()
+        self.assertEqual("not_loaded", status.sales.status)
+        self.assertEqual("not_loaded", status.targets.status)
+
+    def test_startup_with_cache_restores_without_drive_sync(self) -> None:
+        cached = _status("cached")
+        with patch.object(google_drive, "_restore_any_local_cache", return_value=cached), patch.object(
+            google_drive, "load_drive_business_files"
+        ) as loader:
+            status = google_drive.ensure_drive_data_loaded(force=False)
+
+        loader.assert_not_called()
+        self.assertIs(cached, status)
+
+    def test_force_refresh_still_calls_drive_sync(self) -> None:
+        with patch.object(google_drive, "load_drive_business_files", return_value=_status("loaded")) as loader:
+            status = google_drive.ensure_drive_data_loaded(force=True)
+
+        loader.assert_called_once_with(force=True)
+        self.assertEqual("loaded", status.sales.status)
+
+    def test_cost_snapshots_without_cache_do_not_scan_drive_on_startup(self) -> None:
+        with patch.object(google_drive, "_restore_cost_snapshot_cache", return_value=None), patch.object(
+            google_drive, "get_drive_service"
+        ) as service_factory:
+            registry, snapshots = google_drive.load_drive_cost_snapshots(force=False)
+
+        service_factory.assert_not_called()
+        self.assertEqual([], registry.entries)
+        self.assertEqual([], snapshots)
+
+
 if __name__ == "__main__":
     unittest.main()

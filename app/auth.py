@@ -23,7 +23,13 @@ from app.google_drive import (
     get_drive_config,
     get_drive_service,
 )
-from app.google_transport import close_google_service, with_google_transport_retry
+from app.google_transport import (
+    close_google_service,
+    google_auth_request,
+    is_retryable_google_transport_error,
+    stage_timer,
+    with_google_transport_retry,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -533,19 +539,22 @@ def _oauth_context(returned_state: str) -> dict[str, str]:
 
 
 def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
-    from google.auth.transport.requests import Request
     from google.oauth2 import id_token
 
-    context = _oauth_context(returned_state)
-    if returned_state != context["state"]:
-        raise PermissionError("登录状态校验失败，请重新点击 Continue with Google。")
-    flow = _auth_flow(
-        redirect_uri=context["redirect_uri"],
-        state=context["state"],
-        code_verifier=context["code_verifier"],
-    )
+    with stage_timer("oauth_callback_received") as done:
+        context = _oauth_context(returned_state)
+        if returned_state != context["state"]:
+            raise PermissionError("登录状态校验失败，请重新点击 Continue with Google。")
+        flow = _auth_flow(
+            redirect_uri=context["redirect_uri"],
+            state=context["state"],
+            code_verifier=context["code_verifier"],
+        )
+        done()
     try:
-        with_google_transport_retry("oauth_token_exchange", lambda: flow.fetch_token(code=code, timeout=(5, 20)))
+        with stage_timer("oauth_token_exchange") as done:
+            with_google_transport_retry("oauth_token_exchange", lambda: flow.fetch_token(code=code, timeout=(5, 20)))
+            done()
     except Exception as exc:
         message = str(exc)
         if "Missing code verifier" in message or "invalid_grant" in message:
@@ -556,10 +565,12 @@ def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
     if not token:
         raise PermissionError("Google login did not return an identity token.")
     audience = _oauth_client_config()["web"]["client_id"]
-    verified = with_google_transport_retry(
-        "oauth_id_token_verify",
-        lambda: id_token.verify_oauth2_token(token, Request(), audience),
-    )
+    with stage_timer("oauth_id_token_verification") as done:
+        verified = with_google_transport_retry(
+            "oauth_id_token_verify",
+            lambda: id_token.verify_oauth2_token(token, google_auth_request(timeout=20), audience),
+        )
+        done()
     verified["_return_to"] = context.get("return_to", "")
     return verified
 
@@ -666,14 +677,17 @@ def logout() -> None:
 
 @st.cache_data(show_spinner=False, ttl=300)
 def load_users_table() -> pd.DataFrame:
-    config = get_drive_config()
-    service = get_drive_service(config)
-    try:
-        metadata = find_drive_file_in_folder_path(service, config.folder_id, "Master Data", ["Users.xlsx"])
-        content = download_drive_file(service, metadata.file_id).getvalue()
-    finally:
-        close_google_service(service)
-    return pd.read_excel(BytesIO(content))
+    with stage_timer("users_xlsx_load") as done:
+        config = get_drive_config()
+        service = get_drive_service(config)
+        try:
+            metadata = find_drive_file_in_folder_path(service, config.folder_id, "Master Data", ["Users.xlsx"])
+            content = download_drive_file(service, metadata.file_id).getvalue()
+        finally:
+            close_google_service(service)
+        users = pd.read_excel(BytesIO(content))
+        done(rows=len(users))
+        return users
 
 
 def authenticate_google_callback() -> None:
@@ -685,7 +699,9 @@ def authenticate_google_callback() -> None:
         info = _verify_callback_code(str(code), state)
         email = _normalize_email(info.get("email"))
         display_name = str(info.get("name") or email).strip()
-        user = find_user_record(load_users_table(), email)
+        with stage_timer("user_authorization_lookup") as done:
+            user = find_user_record(load_users_table(), email)
+            done()
         user = AuthUser(email=user.email, name=user.name or display_name or user.email, role=user.role, google_sub=str(info.get("sub", "") or ""))
         set_login_session(user)
         session_token = _create_app_session(user)
@@ -698,7 +714,10 @@ def authenticate_google_callback() -> None:
         st.query_params.clear()
         st.rerun()
     except Exception as exc:
-        st.session_state["auth_error"] = str(exc)
+        if is_retryable_google_transport_error(exc):
+            st.session_state["auth_error"] = "Google 登录网络暂时不稳定，请稍后重新点击 Continue with Google。"
+        else:
+            st.session_state["auth_error"] = str(exc)
         _clear_oauth_context()
         st.query_params.clear()
         st.rerun()

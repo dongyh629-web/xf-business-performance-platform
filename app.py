@@ -14,6 +14,7 @@ from app.google_drive import (
     store_sales_import_in_session,
     store_target_workbook_in_session,
 )
+from app.google_transport import stage_timer
 from app.target_metrics import analyze_target_workbook, parse_xf_target_workbook, workbook_looks_like_sales_data
 from app.ui import bar_chart, donut_chart, inject_global_styles, line_chart, metric_row, safe_page_link, section_header, show_code_warning, show_filters
 
@@ -28,7 +29,9 @@ auth_user = require_login("overview")
 redirect_to_post_login_page()
 
 def render_home_page() -> None:
-    drive_status = ensure_drive_data_loaded()
+    with stage_timer("dashboard_data_prepare") as dashboard_done:
+        drive_status = ensure_drive_data_loaded()
+        dashboard_done(status="drive_checked")
     uploaded, uploaded_target = render_data_source_sidebar(show_uploaders=True)
 
     if uploaded is not None:
@@ -76,21 +79,37 @@ def render_home_page() -> None:
     df = st.session_state.get("clean_data")
 
     if df is None:
+        st.markdown("## 欢迎使用 XF Business Performance Platform")
         if not drive_status.configured:
             st.info("Google Drive 尚未配置。请配置 Streamlit Secrets，或使用左侧手动上传销售明细。")
         elif drive_status.sales.status == "failed":
             st.warning(drive_status.sales.message)
             st.info("当前暂无销售数据，可使用左侧手动上传销售明细作为备用。")
         else:
-            st.info("当前暂无销售数据，请使用左侧手动上传销售明细，或点击“刷新 Google Drive 数据”。")
+            st.warning("🟡 尚未同步业务数据")
+            st.markdown(
+                """
+                当前尚未加载业务数据。
+
+                请在左侧 **数据同步** 中点击 **刷新 Google Drive 数据**。
+
+                首次同步需要下载并解析销售、目标和成本文件，可能需要约 1 分钟。
+                """
+            )
         st.stop()
+
+    loaded_at = st.session_state.get("drive_sales_loaded_at") or st.session_state.get("drive_target_loaded_at") or "无"
+    cutoff = st.session_state.get("drive_sales_max_date") or "无"
+    st.success(f"🟢 数据已同步｜截止：{cutoff}｜更新时间：{loaded_at}")
 
     filtered = show_filters(df, "home")
 
     show_code_warning(filtered)
     quality = st.session_state.get("quality", {})
 
-    render_business_dashboard(filtered)
+    with stage_timer("dashboard_render") as dashboard_done:
+        render_business_dashboard(filtered)
+        dashboard_done(rows=len(filtered))
     st.divider()
 
     section_header("趋势和结构")

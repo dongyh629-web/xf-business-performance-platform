@@ -5,7 +5,9 @@ import logging
 import socket
 import ssl
 import time
+from contextlib import contextmanager
 from collections.abc import Callable
+from collections.abc import Iterator
 from typing import TypeVar
 
 
@@ -24,6 +26,40 @@ class GoogleHttpStatusError(RuntimeError):
         super().__init__(f"Google request failed stage={stage} status={status_code}")
         self.status_code = status_code
         self.stage = stage
+
+
+@contextmanager
+def stage_timer(stage: str) -> Iterator[Callable[..., None]]:
+    start = time.perf_counter()
+    logger.info("stage=%s status=start", stage)
+
+    def success(**details: object) -> None:
+        parts = [f"{key}={value}" for key, value in details.items() if value is not None]
+        suffix = " " + " ".join(parts) if parts else ""
+        logger.info("stage=%s status=success elapsed=%.3fs%s", stage, time.perf_counter() - start, suffix)
+
+    try:
+        yield success
+    except Exception as exc:
+        logger.warning(
+            "stage=%s status=failure elapsed=%.3fs error_type=%s",
+            stage,
+            time.perf_counter() - start,
+            exc.__class__.__name__,
+        )
+        raise
+
+
+def google_auth_request(timeout: int = 20):
+    from google.auth.transport.requests import Request
+
+    request = Request()
+
+    def request_with_timeout(*args, **kwargs):
+        kwargs.setdefault("timeout", timeout)
+        return request(*args, **kwargs)
+
+    return request_with_timeout
 
 
 def is_retryable_google_transport_error(exc: BaseException) -> bool:
