@@ -23,6 +23,7 @@ from app.google_drive import (
     get_drive_config,
     get_drive_service,
 )
+from app.google_transport import close_google_service, with_google_transport_retry
 
 
 logger = logging.getLogger(__name__)
@@ -544,7 +545,7 @@ def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
         code_verifier=context["code_verifier"],
     )
     try:
-        flow.fetch_token(code=code)
+        with_google_transport_retry("oauth_token_exchange", lambda: flow.fetch_token(code=code, timeout=(5, 20)))
     except Exception as exc:
         message = str(exc)
         if "Missing code verifier" in message or "invalid_grant" in message:
@@ -555,7 +556,10 @@ def _verify_callback_code(code: str, returned_state: str) -> dict[str, object]:
     if not token:
         raise PermissionError("Google login did not return an identity token.")
     audience = _oauth_client_config()["web"]["client_id"]
-    verified = id_token.verify_oauth2_token(token, Request(), audience)
+    verified = with_google_transport_retry(
+        "oauth_id_token_verify",
+        lambda: id_token.verify_oauth2_token(token, Request(), audience),
+    )
     verified["_return_to"] = context.get("return_to", "")
     return verified
 
@@ -664,8 +668,11 @@ def logout() -> None:
 def load_users_table() -> pd.DataFrame:
     config = get_drive_config()
     service = get_drive_service(config)
-    metadata = find_drive_file_in_folder_path(service, config.folder_id, "Master Data", ["Users.xlsx"])
-    content = download_drive_file(service, metadata.file_id).getvalue()
+    try:
+        metadata = find_drive_file_in_folder_path(service, config.folder_id, "Master Data", ["Users.xlsx"])
+        content = download_drive_file(service, metadata.file_id).getvalue()
+    finally:
+        close_google_service(service)
     return pd.read_excel(BytesIO(content))
 
 

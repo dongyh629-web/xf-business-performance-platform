@@ -24,6 +24,7 @@ from app.cost_snapshots import (
     load_cost_snapshot_from_bytes,
 )
 from app.data import ImportResult, import_excel
+from app.google_transport import close_google_service, with_google_transport_retry
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
 
 
@@ -405,13 +406,14 @@ def get_drive_config(secrets: Any | None = None) -> DriveConfig:
     )
 
 
-@st.cache_resource(show_spinner=False)
 def get_drive_service(config: DriveConfig):
     try:
         from google.auth.exceptions import RefreshError
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
+        from google_auth_httplib2 import AuthorizedHttp
         from googleapiclient.discovery import build
+        import httplib2
     except ImportError as exc:
         raise DriveUserError("缺少 Google Drive 读取依赖，请确认 requirements.txt 已安装 google-api-python-client 和 google-auth。") from exc
 
@@ -424,8 +426,9 @@ def get_drive_service(config: DriveConfig):
             client_secret=config.client_secret,
             scopes=[DRIVE_SCOPE],
         )
-        credentials.refresh(Request())
-        return build("drive", "v3", credentials=credentials, cache_discovery=False)
+        with_google_transport_retry("drive_credentials_refresh", lambda: credentials.refresh(Request()))
+        authorized_http = AuthorizedHttp(credentials, http=httplib2.Http(timeout=30))
+        return build("drive", "v3", http=authorized_http, cache_discovery=False)
     except RefreshError as exc:
         logger.warning("Google OAuth refresh failed: %s", exc.__class__.__name__)
         text = str(exc).lower()
@@ -533,19 +536,16 @@ def _list_drive_children(service, folder_id: str, mime_type: str | None = None) 
     page_token = None
     try:
         while True:
-            response = (
-                service.files()
-                .list(
-                    q=" and ".join(query_parts),
-                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,shortcutDetails)",
-                    pageSize=100,
-                    pageToken=page_token,
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                    corpora="allDrives",
-                )
-                .execute()
+            request = service.files().list(
+                q=" and ".join(query_parts),
+                fields="nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,shortcutDetails)",
+                pageSize=100,
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                corpora="allDrives",
             )
+            response = with_google_transport_retry("drive_children_list", request.execute)
             files.extend(response.get("files", []))
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -576,18 +576,15 @@ def find_drive_file(service, folder_id: str, file_name: str) -> DriveFileMetadat
         f"name = '{_escape_drive_query_value(file_name)}' and trashed = false"
     )
     try:
-        response = (
-            service.files()
-            .list(
-                q=query,
-                fields="files(id,name,mimeType,modifiedTime,size,webViewLink)",
-                pageSize=10,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-                corpora="allDrives",
-            )
-            .execute()
+        request = service.files().list(
+            q=query,
+            fields="files(id,name,mimeType,modifiedTime,size,webViewLink)",
+            pageSize=10,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora="allDrives",
         )
+        response = with_google_transport_retry("drive_file_lookup", request.execute)
     except Exception as exc:
         logger.exception("Google Drive file lookup failed for file_name=%s", file_name)
         raise DriveUserError("Google Drive 文件查找失败，请检查 Drive API、folder_id 和文件夹权限。") from exc
@@ -1027,15 +1024,12 @@ def _analysis_year_from_session() -> int | None:
 
 def get_drive_file_metadata(service, file_id: str) -> DriveFileMetadata:
     try:
-        item = (
-            service.files()
-            .get(
-                fileId=file_id,
-                fields="id,name,mimeType,modifiedTime,size,webViewLink",
-                supportsAllDrives=True,
-            )
-            .execute()
+        request = service.files().get(
+            fileId=file_id,
+            fields="id,name,mimeType,modifiedTime,size,webViewLink",
+            supportsAllDrives=True,
         )
+        item = with_google_transport_retry("drive_file_metadata", request.execute)
     except Exception as exc:
         logger.exception("Google Drive metadata lookup failed file_id=%s", file_id)
         raise DriveUserError("Google Drive 文件 metadata 读取失败。") from exc
@@ -1061,7 +1055,7 @@ def download_drive_file(service, file_id: str) -> BytesIO:
         downloader = MediaIoBaseDownload(output, request)
         done = False
         while not done:
-            _, done = downloader.next_chunk()
+            _, done = with_google_transport_retry("drive_file_download", downloader.next_chunk)
     except Exception as exc:
         logger.exception("Google Drive file download failed file_id=%s", file_id)
         raise DriveUserError("Google Drive 文件下载失败，请检查文件权限和网络连接。") from exc
@@ -1485,14 +1479,17 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
         return status
 
     try:
-        sales_status = _load_sales_file(service, config, force)
-    except DriveUserError as exc:
-        sales_status = _status_from_error(str(exc))
+        try:
+            sales_status = _load_sales_file(service, config, force)
+        except DriveUserError as exc:
+            sales_status = _status_from_error(str(exc))
 
-    try:
-        target_status = _load_target_file(service, config, force)
-    except DriveUserError as exc:
-        target_status = _status_from_error(str(exc))
+        try:
+            target_status = _load_target_file(service, config, force)
+        except DriveUserError as exc:
+            target_status = _status_from_error(str(exc))
+    finally:
+        close_google_service(service)
 
     status = DriveLoadStatus(
         configured=True,
@@ -1516,7 +1513,10 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
     try:
         config = get_drive_config()
         service = get_drive_service(config)
-        registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
+        try:
+            registry = list_drive_cost_snapshot_candidates(service, config.folder_id)
+        finally:
+            close_google_service(service)
     except DriveUserError as exc:
         if session_cost is not None:
             registry, snapshots = session_cost
@@ -1538,27 +1538,31 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
             return cached
 
     snapshots: list[CostSnapshot] = []
-    for entry in registry.entries:
-        if not entry.participates_in_matching:
-            continue
-        try:
-            content = download_drive_file(service, str(entry.file_id)).getvalue()
-            snapshot = load_cost_snapshot_from_bytes(content, entry)
-        except Exception as exc:
-            entry.validation_status = "Invalid"
-            entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
-            entry.participates_in_matching = False
-            logger.warning("Google Drive cost snapshot rejected file_name=%s reason=%s", entry.file_name, exc.__class__.__name__)
-            continue
-        entry.row_count = snapshot.registry_entry.row_count
-        entry.valid_sku_count = snapshot.registry_entry.valid_sku_count
-        entry.duplicate_sku_count = snapshot.registry_entry.duplicate_sku_count
-        entry.validation_status = snapshot.registry_entry.validation_status
-        entry.warnings.extend(snapshot.registry_entry.warnings)
-        entry.errors.extend(snapshot.registry_entry.errors)
-        entry.participates_in_matching = snapshot.registry_entry.participates_in_matching
-        if snapshot.registry_entry.participates_in_matching:
-            snapshots.append(snapshot)
+    service = get_drive_service(config)
+    try:
+        for entry in registry.entries:
+            if not entry.participates_in_matching:
+                continue
+            try:
+                content = download_drive_file(service, str(entry.file_id)).getvalue()
+                snapshot = load_cost_snapshot_from_bytes(content, entry)
+            except Exception as exc:
+                entry.validation_status = "Invalid"
+                entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
+                entry.participates_in_matching = False
+                logger.warning("Google Drive cost snapshot rejected file_name=%s reason=%s", entry.file_name, exc.__class__.__name__)
+                continue
+            entry.row_count = snapshot.registry_entry.row_count
+            entry.valid_sku_count = snapshot.registry_entry.valid_sku_count
+            entry.duplicate_sku_count = snapshot.registry_entry.duplicate_sku_count
+            entry.validation_status = snapshot.registry_entry.validation_status
+            entry.warnings.extend(snapshot.registry_entry.warnings)
+            entry.errors.extend(snapshot.registry_entry.errors)
+            entry.participates_in_matching = snapshot.registry_entry.participates_in_matching
+            if snapshot.registry_entry.participates_in_matching:
+                snapshots.append(snapshot)
+    finally:
+        close_google_service(service)
 
     manifest = _cost_manifest(registry)
     manifest_signature = _cost_manifest_signature(manifest)

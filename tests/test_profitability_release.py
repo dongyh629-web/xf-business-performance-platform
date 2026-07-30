@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import inspect
 
 from app import google_drive
 from app.auth import has_permission
@@ -15,6 +16,10 @@ class ProfitabilityReleaseTests(unittest.TestCase):
             "render_data_source_sidebar",
         ]:
             self.assertTrue(hasattr(google_drive, name), name)
+
+    def test_drive_service_is_not_cached_as_long_lived_transport(self) -> None:
+        source = inspect.getsource(google_drive.get_drive_service)
+        self.assertNotIn("@st.cache_resource", source)
 
     def test_profitability_and_validation_permissions(self) -> None:
         self.assertTrue(has_permission("margin", "Admin"))
