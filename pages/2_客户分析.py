@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date
 
 import pandas as pd
@@ -22,6 +24,69 @@ def percent_or_na(value) -> str:
     if pd.isna(value):
         return "暂无可比数据"
     return f"{float(value):.1%}"
+
+
+def _parse_display_number(value: object) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text in {"N/A", "暂无可比数据", "无基准"}:
+        return None
+    negative = text.startswith("-")
+    cleaned = text.replace("£", "").replace(",", "").replace("%", "").replace("+", "").replace("-", "").strip()
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return None
+    return -number if negative else number
+
+
+def _profit_style(value: object) -> str:
+    number = _parse_display_number(value)
+    if number is None:
+        return "color: #6b7280; background-color: #f9fafb;"
+    if number < 0:
+        return "color: #991b1b; background-color: #fff1f2;"
+    if number > 0:
+        return "color: #166534; background-color: #f0fdf4;"
+    return ""
+
+
+def _margin_style(value: object) -> str:
+    number = _parse_display_number(value)
+    if number is None:
+        return "color: #6b7280; background-color: #f9fafb;"
+    if number < 0:
+        return "color: #991b1b; background-color: #fff1f2;"
+    if number < 10:
+        return "color: #9a3412; background-color: #fff7ed;"
+    if number < 20:
+        return "color: #854d0e; background-color: #fefce8;"
+    return "color: #166534; background-color: #f0fdf4;"
+
+
+def _coverage_style(value: object) -> str:
+    number = _parse_display_number(value)
+    if number is None:
+        return "color: #6b7280; background-color: #f9fafb;"
+    if number < 30:
+        return "color: #991b1b; background-color: #fff1f2;"
+    if number < 70:
+        return "color: #854d0e; background-color: #fefce8;"
+    return "color: #166534; background-color: #f0fdf4;"
+
+
+def _customer_summary_styler(table: pd.DataFrame):
+    styled = table.style
+    if "毛利" in table.columns:
+        styled = styled.map(_profit_style, subset=["毛利"])
+    if "毛利率" in table.columns:
+        styled = styled.map(_margin_style, subset=["毛利率"])
+    if "同比增长" in table.columns:
+        styled = styled.map(_profit_style, subset=["同比增长"])
+    if "成本覆盖率" in table.columns:
+        styled = styled.map(_coverage_style, subset=["成本覆盖率"])
+    return styled
 
 
 def _order_amount_metrics(data: pd.DataFrame, customer_summary: pd.DataFrame) -> dict[str, object]:
@@ -228,6 +293,7 @@ else:
             "毛利率": table["Commercial Gross Margin"] if "Commercial Gross Margin" in table.columns else pd.NA,
             "成本": table["Commercial Cost"] if "Commercial Cost" in table.columns else pd.NA,
             "ASP": table["ASP"] if "ASP" in table.columns else pd.NA,
+            "成本覆盖率": table["Cost Coverage"] if "Cost Coverage" in table.columns else pd.NA,
             "订单数": table["Order Count"],
             "平均订单金额": table["Average Order Value"],
             "ABC 等级": table["ABC Class"],
@@ -260,6 +326,7 @@ else:
         "毛利率（高到低）": ("毛利率", False),
         "成本（高到低）": ("成本", False),
         "ASP（高到低）": ("ASP", False),
+        "成本覆盖率（高到低）": ("成本覆盖率", False),
         "同比增长（高到低）": ("同比增长", False),
         "销售贡献率（高到低）": ("销售贡献率", False),
         "订单数（高到低）": ("订单数", False),
@@ -282,7 +349,7 @@ else:
     filtered_table = filtered_table[filtered_table["客户类型"].isin(selected_types)]
 
     sort_col, ascending = sort_options[sort_label]
-    if sort_col in ["已核算销售", "毛利", "毛利率", "成本", "ASP", "同比增长"]:
+    if sort_col in ["已核算销售", "毛利", "毛利率", "成本", "ASP", "成本覆盖率", "同比增长"]:
         filtered_table = filtered_table.assign(_sort_value=pd.to_numeric(filtered_table[sort_col], errors="coerce").fillna(float("-inf")))
         filtered_table = filtered_table.sort_values("_sort_value", ascending=ascending).drop(columns=["_sort_value"])
     else:
@@ -307,6 +374,7 @@ else:
         formatted_table["毛利率"] = formatted_table["毛利率"].map(percent_or_na)
         formatted_table["成本"] = formatted_table["成本"].map(money_or_na)
         formatted_table["ASP"] = formatted_table["ASP"].map(money_or_na)
+        formatted_table["成本覆盖率"] = formatted_table["成本覆盖率"].map(percent_or_na)
         formatted_table["同比增长"] = formatted_table["同比增长"].map(percent_or_na)
         formatted_table["销售贡献率"] = formatted_table["销售贡献率"].map(percent)
         formatted_table["平均订单金额"] = formatted_table["平均订单金额"].map(money)
@@ -320,7 +388,8 @@ else:
             mime="text/csv",
         )
         st.dataframe(
-            formatted_table[
+            _customer_summary_styler(
+                formatted_table[
                 [
                     "客户名称",
                     "客户代码",
@@ -330,6 +399,7 @@ else:
                     "毛利率",
                     "成本",
                     "ASP",
+                    "成本覆盖率",
                     "订单数",
                     "平均订单金额",
                     "ABC 等级",
@@ -344,7 +414,8 @@ else:
                     "首次下单日期",
                     "产品组数",
                 ]
-            ],
+                ]
+            ),
             width="stretch",
             hide_index=True,
             column_config={

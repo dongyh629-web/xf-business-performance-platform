@@ -137,12 +137,21 @@ with right:
 section_header("单产品趋势")
 product_dimension = "Product Key" if "Product Key" in filtered.columns else "Product"
 label_dimension = "Product Label" if "Product Label" in filtered.columns else product_dimension
-product_options = filtered[[product_dimension, label_dimension]].dropna().drop_duplicates().sort_values(label_dimension)
+group_options = ["全部系列"]
+if "Product Group" in filtered.columns:
+    group_options.extend(sorted(filtered["Product Group"].fillna("未分类").astype(str).unique().tolist()))
+selected_product_group = st.selectbox("产品系列 / Product Group", group_options, key="product_trend_group_filter")
+trend_basis = filtered
+if selected_product_group != "全部系列" and "Product Group" in filtered.columns:
+    trend_basis = filtered[filtered["Product Group"].fillna("未分类").astype(str).eq(selected_product_group)]
+product_options = trend_basis[[product_dimension, label_dimension]].dropna().drop_duplicates().sort_values(label_dimension)
 products = product_options[label_dimension].astype(str).tolist()
 if not products:
     st.info("当前筛选范围内没有产品数据。")
     st.stop()
-selected_product = st.selectbox("选择产品", products)
+if st.session_state.get("product_trend_product") not in products:
+    st.session_state["product_trend_product"] = products[0]
+selected_product = st.selectbox("选择产品", products, key="product_trend_product")
 selected_key = product_options.loc[product_options[label_dimension].astype(str).eq(selected_product), product_dimension].iloc[0]
 product_df = filtered[filtered[product_dimension].eq(selected_key)]
 

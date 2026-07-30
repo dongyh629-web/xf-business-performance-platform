@@ -1072,7 +1072,39 @@ def bar_chart(data: pd.DataFrame, x: str, y: str, title: str, orientation: str =
 def donut_chart(data: pd.DataFrame, names: str, values: str, title: str):
     plot_data = data.copy()
     plot_data[names] = plot_data[names].fillna("未分类").astype(str).replace({"<NA>": "未分类", "nan": "未分类"})
+    plot_data[values] = pd.to_numeric(plot_data[values], errors="coerce").fillna(0)
+    plot_data = plot_data.groupby(names, dropna=False, as_index=False)[values].sum()
+    total = float(plot_data[values].sum())
+    if total > 0 and len(plot_data) > 6:
+        plot_data["_share"] = plot_data[values] / total
+        small = plot_data["_share"] < 0.03
+        if small.any():
+            other_value = float(plot_data.loc[small, values].sum())
+            plot_data = plot_data.loc[~small, [names, values]]
+            if other_value > 0:
+                plot_data = pd.concat(
+                    [plot_data, pd.DataFrame([{names: "其他 / Other", values: other_value}])],
+                    ignore_index=True,
+                )
+    plot_data = plot_data.sort_values(values, ascending=False)
+    shares = plot_data[values] / total if total else pd.Series([0] * len(plot_data), index=plot_data.index)
+    text_labels = [f"{share:.1%}" if share >= 0.03 else "" for share in shares]
     fig = px.pie(plot_data, names=names, values=values, title=title, hole=0.55)
-    fig.update_traces(textposition="inside", textinfo="percent", hovertemplate="%{label}<br>销售额：£%{value:,.2f}<br>占比：%{percent}<extra></extra>")
-    fig.update_layout(height=360)
-    return style_plotly(fig)
+    fig.update_traces(
+        text=text_labels,
+        textposition="inside",
+        textinfo="text",
+        hovertemplate="%{label}<br>销售额：£%{value:,.2f}<br>占比：%{percent}<extra></extra>",
+    )
+    fig.update_layout(
+        height=380,
+        margin=dict(l=10, r=10, t=70, b=42),
+        title=dict(y=0.98, x=0.02, xanchor="left", font=dict(size=15, color="#202124")),
+    )
+    fig = style_plotly(fig)
+    fig.update_layout(
+        margin=dict(l=10, r=10, t=70, b=42),
+        legend=dict(orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5, font=dict(size=10), tracegroupgap=4),
+        title=dict(y=0.98, x=0.02, xanchor="left", font=dict(size=15, color="#202124")),
+    )
+    return fig
