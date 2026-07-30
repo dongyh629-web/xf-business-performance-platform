@@ -11,8 +11,8 @@ from app.business_metrics import (
     aggregate_customer_profitability,
     aggregate_product_group_profitability,
     aggregate_product_profitability,
-    build_business_metrics_dataframe,
     cost_coverage_report,
+    get_cached_business_metrics,
     invalid_unit_cost_rows,
     monthly_profitability,
     negative_gross_profit_transactions,
@@ -248,14 +248,9 @@ def _render_interpretation(kpis: dict[str, float | None]) -> None:
     )
 
 
-@st.cache_data(show_spinner=False)
-def _cached_business_metrics(sales_data: pd.DataFrame, snapshots: list) -> pd.DataFrame:
-    return build_business_metrics_dataframe(sales_data, snapshots)
-
-
 def _completed_date_filter(data: pd.DataFrame) -> pd.DataFrame:
-    filtered = data.copy()
-    dates = pd.to_datetime(filtered["Completed Date"], errors="coerce")
+    filtered = data
+    dates = pd.to_datetime(data["Completed Date"], errors="coerce")
     min_date = dates.dropna().min()
     max_date = dates.dropna().max()
     with st.sidebar:
@@ -272,7 +267,7 @@ def _completed_date_filter(data: pd.DataFrame) -> pd.DataFrame:
             if isinstance(selected, tuple) and len(selected) == 2:
                 start, end = pd.Timestamp(selected[0]), pd.Timestamp(selected[1])
                 normalized = dates.dt.normalize()
-                filtered = filtered[normalized.between(start, end, inclusive="both")]
+                filtered = data.loc[normalized.between(start, end, inclusive="both")]
 
         product_groups = sorted(filtered["Product Group"].fillna("未分类").astype(str).unique().tolist()) if "Product Group" in filtered.columns else []
         with st.expander("产品系列 / Product Group", expanded=False):
@@ -528,7 +523,7 @@ except DriveUserError as exc:
 if not cost_snapshots:
     st.info("当前没有可用成本快照。页面会保留销售数据，但无法计算毛利。")
 
-metrics_df = _cached_business_metrics(sales_df, cost_snapshots)
+metrics_df = get_cached_business_metrics(sales_df, cost_snapshots)
 filtered = _completed_date_filter(metrics_df)
 
 with st.expander("数据口径说明 / Calculation Method", expanded=False):

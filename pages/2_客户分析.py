@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app.auth import require_login
-from app.business_metrics import aggregate_customer_profitability, build_business_metrics_dataframe, profitability_kpis
+from app.business_metrics import aggregate_customer_profitability, get_cached_business_metrics, profitability_kpis
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
 from app.customer_metrics import abc_distribution, build_customer_summary, concentration_metrics
 from app.data import monthly_sales, top_entity_table, top_table
@@ -86,11 +86,6 @@ def _iqr_text(value: object) -> str:
     return f"{money(low)} ~ {money(high)}"
 
 
-@st.cache_data(show_spinner=False)
-def _cached_business_metrics(sales_data: pd.DataFrame, snapshots: list) -> pd.DataFrame:
-    return build_business_metrics_dataframe(sales_data, snapshots)
-
-
 def _merge_customer_profitability(customer_summary: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
     if customer_summary.empty:
         return customer_summary
@@ -141,8 +136,9 @@ except DriveUserError as exc:
     st.warning(f"成本快照暂不可用，客户毛利字段将显示为 N/A。{exc}")
     cost_snapshots = []
 
-metrics_df = _cached_business_metrics(df, cost_snapshots)
-filtered = show_filters(metrics_df, "customers")
+filtered_sales = show_filters(df, "customers")
+filtered = get_cached_business_metrics(filtered_sales, cost_snapshots)
+filtered.attrs.update(filtered_sales.attrs)
 show_code_warning(filtered)
 show_context_summary(filtered)
 

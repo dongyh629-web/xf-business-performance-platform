@@ -56,6 +56,33 @@ def _product_key(data: pd.DataFrame) -> pd.Series:
     return data["Product Code"].astype("string").str.strip()
 
 
+def _existing_columns(data: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [column for column in columns if column in data.columns]
+
+
+VALIDATION_DETAIL_COLUMNS = [
+    "Completed Date",
+    "Customer",
+    "Customer Label",
+    "Product Code",
+    "Product Name",
+    "Product Group",
+    "Quantity",
+    "Sales Amount",
+    "Unit Selling Price",
+    "Unit Cost",
+    "Total Cost",
+    "Gross Profit",
+    "Margin %",
+    "Cost Match Status",
+    "Business Validation Status",
+    "Validation Reason",
+    "Zero-value Reason",
+    "Zero-value Validation Status",
+    "Zero-value Recommended Action",
+]
+
+
 def _costed_mask(data: pd.DataFrame) -> pd.Series:
     return _numeric(data, "Gross Profit").notna()
 
@@ -67,7 +94,7 @@ def gift_free_of_charge_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
 def zero_value_outbound_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
     sales = _numeric(metrics_df, "Sales Amount").fillna(0)
     quantity = _numeric(metrics_df, "Quantity").fillna(0)
-    rows = metrics_df.loc[sales.eq(0) & quantity.gt(0)].copy()
+    rows = metrics_df.loc[sales.eq(0) & quantity.gt(0), _existing_columns(metrics_df, VALIDATION_DETAIL_COLUMNS)].copy()
     if rows.empty:
         return rows
     if "Zero-value Reason" not in rows.columns:
@@ -108,18 +135,17 @@ def zero_value_outbound_summary(metrics_df: pd.DataFrame) -> dict[str, float | i
 
 def unit_validation_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
     if metrics_df.empty:
-        return metrics_df.copy()
-    data = metrics_df.copy()
-    sales = _numeric(data, "Sales Amount")
-    quantity = _numeric(data, "Quantity")
-    unit_cost = _numeric(data, "Unit Cost")
-    unit_price = _numeric(data, "Unit Selling Price")
-    margin = _numeric(data, "Margin %")
+        return metrics_df.loc[:, _existing_columns(metrics_df, VALIDATION_DETAIL_COLUMNS)].copy()
+    sales = _numeric(metrics_df, "Sales Amount")
+    quantity = _numeric(metrics_df, "Quantity")
+    unit_cost = _numeric(metrics_df, "Unit Cost")
+    unit_price = _numeric(metrics_df, "Unit Selling Price")
+    margin = _numeric(metrics_df, "Margin %")
     high_cost_threshold = float(unit_cost.dropna().quantile(HIGH_UNIT_COST_QUANTILE)) if not unit_cost.dropna().empty else 0.0
     high_quantity_threshold = float(quantity.dropna().quantile(HIGH_QUANTITY_QUANTILE)) if not quantity.dropna().empty else 0.0
 
     reasons: list[str] = []
-    for idx in data.index:
+    for idx in metrics_df.index:
         row_reasons: list[str] = []
         if pd.notna(unit_cost.loc[idx]) and pd.notna(unit_price.loc[idx]) and unit_cost.loc[idx] > unit_price.loc[idx]:
             row_reasons.append("Unit Cost > Unit Selling Price")
@@ -136,8 +162,11 @@ def unit_validation_rows(metrics_df: pd.DataFrame) -> pd.DataFrame:
         if high_cost_threshold and pd.notna(unit_cost.loc[idx]) and unit_cost.loc[idx] >= high_cost_threshold:
             row_reasons.append("Unit Cost high")
         reasons.append("; ".join(row_reasons))
-    data["Validation Reason"] = reasons
-    return data[data["Validation Reason"].astype(str).ne("")].copy()
+    reason_series = pd.Series(reasons, index=metrics_df.index, dtype="string")
+    flagged = reason_series.astype(str).ne("")
+    rows = metrics_df.loc[flagged, _existing_columns(metrics_df, VALIDATION_DETAIL_COLUMNS)].copy()
+    rows["Validation Reason"] = reason_series.loc[flagged].to_numpy()
+    return rows
 
 
 def coverage_summary(metrics_df: pd.DataFrame) -> dict[str, float | int]:
@@ -174,7 +203,7 @@ def coverage_by_dimension(metrics_df: pd.DataFrame, dimension: str) -> pd.DataFr
 
 
 def coverage_by_month(metrics_df: pd.DataFrame) -> pd.DataFrame:
-    data = metrics_df.copy()
+    data = metrics_df.loc[:, _existing_columns(metrics_df, ["Completed Date", "Sales Amount", "Product Code", "Gross Profit"])].copy()
     data["Month"] = pd.to_datetime(data.get("Completed Date"), errors="coerce").dt.to_period("M").astype("string")
     return coverage_by_dimension(data, "Month")
 
@@ -183,7 +212,7 @@ def margin_band_analysis(metrics_df: pd.DataFrame) -> pd.DataFrame:
     columns = ["Margin Band", "Rows", "Sales", "Gross Profit", "Product Count"]
     if metrics_df.empty:
         return pd.DataFrame(columns=columns)
-    data = metrics_df.copy()
+    data = metrics_df.loc[:, _existing_columns(metrics_df, ["Margin %", "Sales Amount", "Gross Profit", "Product Code"])].copy()
     margin = _numeric(data, "Margin %")
     bands = pd.cut(
         margin,
@@ -210,7 +239,7 @@ def margin_band_analysis(metrics_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_business_validation_status(metrics_df: pd.DataFrame) -> pd.DataFrame:
-    data = metrics_df.copy()
+    data = metrics_df.loc[:, _existing_columns(metrics_df, VALIDATION_DETAIL_COLUMNS)].copy()
     data["Business Validation Status"] = "Pending"
     sales = _numeric(data, "Sales Amount").fillna(0)
     quantity = _numeric(data, "Quantity").fillna(0)
@@ -223,15 +252,14 @@ def add_business_validation_status(metrics_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def top_exceptions(metrics_df: pd.DataFrame, limit: int = 20) -> dict[str, pd.DataFrame]:
-    data = metrics_df.copy()
-    sales = _numeric(data, "Sales Amount").fillna(0)
-    gross_profit = _numeric(data, "Gross Profit")
-    status = data.get("Cost Match Status", pd.Series("", index=data.index)).astype("string")
-    unit_risk = unit_validation_rows(data)
-    product_col = "Product Code" if "Product Code" in data.columns else "Product"
+    sales = _numeric(metrics_df, "Sales Amount").fillna(0)
+    gross_profit = _numeric(metrics_df, "Gross Profit")
+    status = metrics_df.get("Cost Match Status", pd.Series("", index=metrics_df.index)).astype("string")
+    unit_risk = unit_validation_rows(metrics_df)
+    product_col = "Product Code" if "Product Code" in metrics_df.columns else "Product"
 
     negative_products = (
-        data.loc[gross_profit.lt(0).fillna(False)]
+        metrics_df.loc[gross_profit.lt(0).fillna(False), _existing_columns(metrics_df, [product_col])]
         .assign(_sales=sales, _gross_profit=gross_profit)
         .groupby(product_col, dropna=False)
         .agg(Sales=("_sales", "sum"), **{"Gross Profit": ("_gross_profit", "sum"), "Rows": (product_col, "size")})
@@ -239,10 +267,12 @@ def top_exceptions(metrics_df: pd.DataFrame, limit: int = 20) -> dict[str, pd.Da
         .sort_values("Sales", ascending=False)
         .head(limit)
     )
-    invalid_cost = data.loc[status.eq("Invalid Unit Cost")].assign(_sales=sales).sort_values("_sales", ascending=False).head(limit)
-    missing_cost = data.loc[status.isin(["Missing Product Cost", "No Cost Version"])].assign(_sales=sales).sort_values("_sales", ascending=False).head(limit)
+    invalid_index = sales.loc[status.eq("Invalid Unit Cost")].sort_values(ascending=False).head(limit).index
+    missing_index = sales.loc[status.isin(["Missing Product Cost", "No Cost Version"])].sort_values(ascending=False).head(limit).index
+    invalid_cost = metrics_df.loc[invalid_index, _existing_columns(metrics_df, VALIDATION_DETAIL_COLUMNS)].copy()
+    missing_cost = metrics_df.loc[missing_index, _existing_columns(metrics_df, VALIDATION_DETAIL_COLUMNS)].copy()
     suspicious = unit_risk.assign(_sales=sales.reindex(unit_risk.index)).sort_values("_sales", ascending=False).head(limit)
-    zero_sales = zero_value_outbound_rows(data).assign(_quantity=_numeric(data, "Quantity")).sort_values("_quantity", ascending=False).head(limit)
+    zero_sales = zero_value_outbound_rows(metrics_df).assign(_quantity=_numeric(metrics_df, "Quantity")).sort_values("_quantity", ascending=False).head(limit)
     return {
         "Top Negative Margin Products": negative_products,
         "Top Invalid Unit Cost": invalid_cost,

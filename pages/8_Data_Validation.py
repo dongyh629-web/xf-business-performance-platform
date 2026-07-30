@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 
 from app.auth import require_login
-from app.business_metrics import build_business_metrics_dataframe
+from app.business_metrics import get_cached_business_metrics
 from app.data_validation import (
     SIGN_OFF_CHECKLIST,
     VALIDATION_STATUS_OPTIONS,
@@ -95,11 +95,6 @@ ZERO_VALUE_STATUS_LABELS = {
 }
 
 
-@st.cache_data(show_spinner=False)
-def _cached_metrics(sales_data: pd.DataFrame, snapshots: list) -> pd.DataFrame:
-    return build_business_metrics_dataframe(sales_data, snapshots)
-
-
 def _format_table(data: pd.DataFrame) -> pd.DataFrame:
     display = data.copy()
     for column in [
@@ -180,12 +175,13 @@ except DriveUserError as exc:
     st.warning(str(exc))
     registry, cost_snapshots = None, []
 
-metrics = _cached_metrics(sales_df, cost_snapshots)
+metrics = get_cached_business_metrics(sales_df, cost_snapshots)
 metrics = add_business_validation_status(metrics)
 
 score = profitability_readiness_score(metrics)
 summary = coverage_summary(metrics)
 zero_summary = zero_value_outbound_summary(metrics)
+unit_rows = unit_validation_rows(metrics)
 
 st.info(
     "此页面仅供 Admin / Finance 内部验证使用。在完成业务签核前，利润数据不建议作为老板视图或正式经营结论。\n\n"
@@ -197,7 +193,7 @@ cols[0].metric("利润就绪评分\nReadiness Score", f"{score.score:.1f}/100")
 cols[1].metric("验证状态\nValidation Status", GRADE_LABELS.get(score.grade, score.grade))
 cols[2].metric("销售成本覆盖率\nSales Cost Coverage", _percent_or_na(summary["Sales Coverage"]))
 cols[3].metric("零价出库记录\nZero-value Rows", f"{zero_summary['Zero-value Rows']:,}")
-cols[4].metric("无效成本 / 单位风险\nInvalid Cost / Unit Risk", f"{len(unit_validation_rows(metrics)):,}")
+cols[4].metric("无效成本 / 单位风险\nInvalid Cost / Unit Risk", f"{len(unit_rows):,}")
 
 with st.expander("业务验证状态 / Business Validation Status", expanded=False):
     st.write(pd.DataFrame({_bilingual("业务验证状态", "Business Validation Status"): VALIDATION_STATUS_OPTIONS}))
@@ -218,7 +214,6 @@ else:
     st.dataframe(_validation_columns(zero_rows.head(300)), width="stretch", hide_index=True)
 
 section_header("单位验证", "Unit Validation")
-unit_rows = unit_validation_rows(metrics)
 if unit_rows.empty:
     st.caption("没有识别到单位/价格/数量风险记录。")
     st.caption("No unit, price or quantity risk rows identified.")

@@ -12,6 +12,7 @@ from app.business_metrics import (
     build_business_metrics_dataframe,
     calculate_cost_coverage,
     cost_coverage_report,
+    get_cached_business_metrics,
     monthly_profitability,
     negative_gross_profit_transactions,
     profitability_kpis,
@@ -37,6 +38,41 @@ class BusinessMetricsTests(unittest.TestCase):
         self.assertEqual(8.0, metrics.loc[0, "Total Cost"])
         self.assertEqual(4.0, metrics.loc[0, "Gross Profit"])
         self.assertAlmostEqual(1 / 3, metrics.loc[0, "Margin %"])
+
+    def test_cached_business_metrics_invalidates_when_inputs_change(self) -> None:
+        get_cached_business_metrics.clear()
+        snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Effective From": "2026-07-01"}])
+        first_sales = pd.DataFrame(
+            {"Completed Date": [pd.Timestamp("2026-07-02")], "Product Code": ["A"], "Quantity": [2], "Sales Amount": [12]}
+        )
+        second_sales = pd.DataFrame(
+            {"Completed Date": [pd.Timestamp("2026-07-02")], "Product Code": ["A"], "Quantity": [2], "Sales Amount": [20]}
+        )
+        first = get_cached_business_metrics(first_sales, [snapshot])
+        second = get_cached_business_metrics(second_sales, [snapshot])
+        self.assertEqual(4.0, first.loc[0, "Gross Profit"])
+        self.assertEqual(12.0, second.loc[0, "Gross Profit"])
+
+    def test_aggregations_do_not_mutate_input_metrics(self) -> None:
+        snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Product Group": "Group A", "Effective From": "2026-07-01"}])
+        sales = pd.DataFrame(
+            {
+                "Completed Date": [pd.Timestamp("2026-07-02")],
+                "Customer": ["C1"],
+                "Product Code": ["A"],
+                "Product Name": ["Alpha"],
+                "Product Group": ["Group A"],
+                "Quantity": [2],
+                "Sales Amount": [12],
+            }
+        )
+        metrics = build_business_metrics_dataframe(sales, [snapshot])
+        before = metrics.copy(deep=True)
+        monthly_profitability(metrics)
+        aggregate_customer_profitability(metrics)
+        aggregate_product_profitability(metrics)
+        aggregate_product_group_profitability(metrics)
+        pd.testing.assert_frame_equal(metrics, before)
 
     def test_sales_amount_zero_keeps_margin_empty(self) -> None:
         snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Effective From": "2026-07-01"}])

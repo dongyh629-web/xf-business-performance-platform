@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
+import streamlit as st
 
 from app.cost_snapshots import CostSnapshot, match_sales_to_cost_versions, normalize_product_code
 
@@ -55,6 +56,10 @@ def _status_column(df: pd.DataFrame) -> pd.Series:
     if "Cost Match Status" not in df.columns:
         return pd.Series("Missing Product Cost", index=df.index, dtype="string")
     return df["Cost Match Status"].astype("string")
+
+
+def _existing_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [column for column in columns if column in df.columns]
 
 
 def ensure_cost_match_columns(metrics: pd.DataFrame) -> pd.DataFrame:
@@ -131,6 +136,14 @@ def build_business_metrics_dataframe(
     else:
         base = sales_df.copy()
     return calculate_profit_metrics(base)
+
+
+@st.cache_data(show_spinner=False)
+def get_cached_business_metrics(
+    sales_df: pd.DataFrame,
+    cost_snapshots: list[CostSnapshot] | None = None,
+) -> pd.DataFrame:
+    return build_business_metrics_dataframe(sales_df, cost_snapshots)
 
 
 def calculate_cost_coverage(metrics_df: pd.DataFrame) -> CostCoverageMetrics:
@@ -270,7 +283,8 @@ def monthly_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     ]
     if metrics_df.empty:
         return pd.DataFrame(columns=columns)
-    data = metrics_df.copy()
+    required = ["Completed Date", "Sales Amount", "Total Cost"]
+    data = metrics_df.loc[:, _existing_columns(metrics_df, required)].copy()
     dates = pd.to_datetime(data.get("Completed Date"), errors="coerce")
     data["Month"] = dates.dt.to_period("M").astype("string")
     data["Sales Amount"] = _numeric_column(data, "Sales Amount").fillna(0)
@@ -376,7 +390,19 @@ def aggregate_product_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     ]
     if metrics_df.empty:
         return pd.DataFrame(columns=columns)
-    data = metrics_df.copy()
+    required = [
+        "Product Code",
+        "Product Name",
+        "Product Description",
+        "Product Group",
+        "Quantity",
+        "Sales Amount",
+        "Total Cost",
+        "Gross Profit",
+        "Unit Cost",
+        "Cost Match Status",
+    ]
+    data = metrics_df.loc[:, _existing_columns(metrics_df, required)].copy()
     data["_Product Code"] = data.get("Product Code", _empty_series(data)).map(normalize_product_code).astype("string")
     data["_Product Description"] = data.get("Product Name", data.get("Product Description", _empty_series(data))).astype("string")
     data["_Product Group"] = data.get("Product Group", _empty_series(data)).astype("string")
@@ -445,7 +471,15 @@ def aggregate_customer_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     ]
     if metrics_df.empty:
         return pd.DataFrame(columns=columns)
-    data = metrics_df.copy()
+    required = [
+        "Customer Label",
+        "Customer",
+        "Sales Amount",
+        "Quantity",
+        "Total Cost",
+        "Gross Profit",
+    ]
+    data = metrics_df.loc[:, _existing_columns(metrics_df, required)].copy()
     customer_col = "Customer Label" if "Customer Label" in data.columns else "Customer"
     data["_Customer"] = data.get(customer_col, _empty_series(data)).astype("string")
     data["Sales Amount"] = _numeric_column(data, "Sales Amount").fillna(0)
@@ -482,10 +516,8 @@ def aggregate_customer_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
 def aggregate_product_group_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     if metrics_df.empty:
         return pd.DataFrame()
-    products = aggregate_product_profitability(metrics_df)
-    if products.empty:
-        return products
-    data = metrics_df.copy()
+    required = ["Product Group", "Sales Amount", "Quantity", "Total Cost", "Gross Profit"]
+    data = metrics_df.loc[:, _existing_columns(metrics_df, required)].copy()
     data["_Product Group"] = data.get("Product Group", _empty_series(data)).astype("string").fillna("Unclassified")
     data["Sales Amount"] = _numeric_column(data, "Sales Amount").fillna(0)
     data["Total Cost"] = _numeric_column(data, "Total Cost")
@@ -524,7 +556,23 @@ def negative_gross_profit_transactions(metrics_df: pd.DataFrame) -> pd.DataFrame
 def suspicious_unit_comparison(metrics_df: pd.DataFrame) -> pd.DataFrame:
     if metrics_df.empty:
         return pd.DataFrame(columns=[*metrics_df.columns, "Suspicion Reason"])
-    data = metrics_df.copy()
+    required = [
+        "Completed Date",
+        "Customer",
+        "Product Code",
+        "Product Name",
+        "Product Group",
+        "Quantity",
+        "Sales Amount",
+        "Unit Selling Price",
+        "Unit Cost",
+        "Total Cost",
+        "Gross Profit",
+        "Margin %",
+        "Cost File Name",
+        "Cost Match Status",
+    ]
+    data = metrics_df.loc[:, _existing_columns(metrics_df, required)].copy()
     sales_amount = _numeric_column(data, "Sales Amount")
     quantity = _numeric_column(data, "Quantity")
     unit_cost = _numeric_column(data, "Unit Cost")
