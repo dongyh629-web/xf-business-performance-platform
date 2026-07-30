@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 import unittest
 
 import pandas as pd
@@ -52,6 +53,19 @@ class BusinessMetricsTests(unittest.TestCase):
         second = get_cached_business_metrics(second_sales, [snapshot])
         self.assertEqual(4.0, first.loc[0, "Gross Profit"])
         self.assertEqual(12.0, second.loc[0, "Gross Profit"])
+
+    def test_profitability_pages_use_shared_business_metrics_entrypoint(self) -> None:
+        pages = [
+            "pages/2_客户分析.py",
+            "pages/7_Profitability.py",
+            "pages/8_Data_Validation.py",
+        ]
+        project_root = Path(__file__).resolve().parents[1]
+        for page_path in pages:
+            source = (project_root / page_path).read_text(encoding="utf-8")
+            self.assertIn("get_cached_business_metrics", source, page_path)
+            self.assertNotIn("def _cached_business_metrics", source, page_path)
+            self.assertNotIn("def _cached_metrics", source, page_path)
 
     def test_aggregations_do_not_mutate_input_metrics(self) -> None:
         snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Product Group": "Group A", "Effective From": "2026-07-01"}])

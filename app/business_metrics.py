@@ -143,6 +143,7 @@ def get_cached_business_metrics(
     sales_df: pd.DataFrame,
     cost_snapshots: list[CostSnapshot] | None = None,
 ) -> pd.DataFrame:
+    """Shared cached Business Metrics entrypoint for all profitability views."""
     return build_business_metrics_dataframe(sales_df, cost_snapshots)
 
 
