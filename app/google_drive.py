@@ -33,7 +33,7 @@ DRIVE_SOURCE_LABEL = "Google Drive"
 MANUAL_SOURCE_LABEL = "本次会话手动上传"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 SALES_FOLDER_NAME = "sales data"
-TARGETS_FOLDER_NAME = "targets"
+TARGETS_FOLDER_NAMES = ("targets data", "targets")
 COST_FOLDER_NAME = "Cost Data"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
@@ -60,8 +60,6 @@ SALES_REFRESH_CORE_KEYS = {
     "source_columns",
     "sales_drive_file_id",
     "sales_drive_modified_time",
-    "home_annual_target",
-    "home_monthly_target",
 }
 REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_snapshot", "drive_target_", "target_")
 SUCCESSFUL_REFRESH_STATUSES = {"loaded", "cached", "unchanged"}
@@ -687,6 +685,25 @@ def list_drive_excel_candidates(service, root_folder_id: str, subfolder_name: st
     return candidates
 
 
+def list_drive_excel_candidates_from_folders(
+    service,
+    root_folder_id: str,
+    subfolder_names: tuple[str, ...],
+) -> list[DriveFileCandidate]:
+    errors: list[str] = []
+    for folder_name in subfolder_names:
+        try:
+            candidates = list_drive_excel_candidates(service, root_folder_id, folder_name)
+        except DriveUserError as exc:
+            errors.append(str(exc))
+            continue
+        if candidates:
+            return candidates
+    if errors:
+        raise DriveUserError("；".join(errors))
+    return []
+
+
 def list_drive_cost_snapshot_candidates(service, root_folder_id: str) -> CostSnapshotRegistry:
     folder = find_drive_folder(service, root_folder_id, COST_FOLDER_NAME)
     items = _list_drive_children(service, folder.file_id)
@@ -1152,21 +1169,6 @@ def store_target_workbook_in_session(parsed: XFTargetWorkbook, file_name: str, s
     st.session_state["target_source_type"] = source_type
     st.session_state["target_drive_modified_time"] = modified_time
 
-    if parsed.target_year:
-        year_targets = target_df[target_df["Year"].astype("Int64").eq(int(parsed.target_year))]
-        if not year_targets.empty:
-            st.session_state["home_annual_target"] = float(pd.to_numeric(year_targets["Revised Target"], errors="coerce").fillna(0).sum())
-            clean_data = st.session_state.get("clean_data")
-            if clean_data is not None and "Performance Date" in clean_data.columns:
-                dates = pd.to_datetime(clean_data["Performance Date"], errors="coerce").dropna()
-                if not dates.empty and dates.max().year == int(parsed.target_year):
-                    anchor_month = int(dates.max().month)
-                    month_rows = year_targets[year_targets["Month"].astype(int).eq(anchor_month)]
-                    if not month_rows.empty:
-                        st.session_state["home_monthly_target"] = float(
-                            pd.to_numeric(month_rows.iloc[-1]["Revised Target"], errors="coerce")
-                        )
-
 
 def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItemStatus:
     st = _get_streamlit()
@@ -1343,7 +1345,10 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
         return DriveLoadItemStatus("skipped", "当前会话已手动上传目标数据，优先使用手动上传。")
     analysis_year = _analysis_year_from_session()
     try:
-        candidates = sorted_target_candidates(list_drive_excel_candidates(service, config.folder_id, TARGETS_FOLDER_NAME), analysis_year)
+        candidates = sorted_target_candidates(
+            list_drive_excel_candidates_from_folders(service, config.folder_id, TARGETS_FOLDER_NAMES),
+            analysis_year,
+        )
     except DriveUserError:
         if st.session_state.get("target_data") is not None:
             st.session_state["drive_target_status"] = "使用上次成功版本"

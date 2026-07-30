@@ -136,17 +136,6 @@ def _store_targets(
         st.session_state["target_case_data"] = case_df
 
 
-def _sync_home_targets(target_year: int, target_df: pd.DataFrame, anchor_month: int | None = None) -> None:
-    year_targets = target_df[target_df["Year"].astype("Int64").eq(target_year)].copy()
-    if year_targets.empty:
-        return
-    st.session_state["home_annual_target"] = float(pd.to_numeric(year_targets["Revised Target"], errors="coerce").fillna(0).sum())
-    if anchor_month:
-        month_rows = year_targets[year_targets["Month"].astype(int).eq(anchor_month)]
-        if not month_rows.empty:
-            st.session_state["home_monthly_target"] = _safe_float(month_rows.iloc[-1]["Revised Target"])
-
-
 def _sales_cutoff_text(sales_df: pd.DataFrame | None) -> str:
     if sales_df is None or "Performance Date" not in sales_df.columns:
         return "无"
@@ -364,8 +353,6 @@ if pending is not None:
         st.session_state["target_source"] = MANUAL_SOURCE_LABEL
         st.session_state["target_source_type"] = "manual"
         st.session_state.pop("target_drive_modified_time", None)
-        if pending.target_year:
-            _sync_home_targets(pending.target_year, pending.company_targets)
         st.success("目标数据已导入当前会话。")
         st.rerun()
 
@@ -426,7 +413,6 @@ with button_cols[0]:
             )
             st.session_state["target_source"] = "当前会话手动调整"
             st.session_state["target_source_type"] = "manual"
-            _sync_home_targets(target_year, next_targets)
             diff = float(pd.to_numeric(edited_targets["Revised Target"], errors="coerce").fillna(0).sum()) - annual_input
             if abs(diff) > 0.01:
                 st.warning(f"12个月 Revised Target 合计与输入年度目标差额为 {money(diff)}。")
@@ -445,7 +431,6 @@ with button_cols[1]:
         )
         st.session_state["target_source"] = "当前会话手动调整"
         st.session_state["target_source_type"] = "manual"
-        _sync_home_targets(target_year, next_targets)
         st.success("已恢复为原始目标。")
         st.rerun()
 
@@ -472,7 +457,6 @@ if target_df is None:
     st.stop()
 
 monthly_table, summary = build_monthly_tracking_table(filtered, target_df, target_year)
-_sync_home_targets(target_year, target_df, summary.analysis_date.month)
 
 annual_target_from_file = st.session_state.get("target_annual_targets", {}).get(target_year)
 if annual_target_from_file is not None:

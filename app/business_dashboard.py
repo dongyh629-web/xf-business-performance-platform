@@ -66,6 +66,16 @@ class BusinessDashboardMetrics:
     week: WeekContext | None
 
 
+@dataclass(frozen=True)
+class DashboardTargetSelection:
+    monthly_target: float
+    annual_target: float
+    has_monthly_target: bool
+    has_annual_target: bool
+    source: str | None
+    message: str | None
+
+
 def _safe_ratio(numerator: float, denominator: float) -> float | None:
     if denominator == 0:
         return None
@@ -302,7 +312,7 @@ def _progress(value: float | None) -> float:
     return max(0.0, min(float(value), 1.0))
 
 
-def _session_targets_for_anchor(df: pd.DataFrame) -> tuple[float, float, str | None]:
+def _target_excel_for_anchor(df: pd.DataFrame) -> DashboardTargetSelection:
     targets = None
     try:
         import streamlit as st
@@ -311,27 +321,64 @@ def _session_targets_for_anchor(df: pd.DataFrame) -> tuple[float, float, str | N
     except Exception:
         targets = None
     if targets is None or targets.empty or "Performance Date" not in df.columns:
-        return 0.0, 0.0, None
+        return DashboardTargetSelection(
+            monthly_target=0.0,
+            annual_target=0.0,
+            has_monthly_target=False,
+            has_annual_target=False,
+            source=None,
+            message="未读取到目标数据。请检查 Google Drive 中的 Target 文件。",
+        )
     dates = pd.to_datetime(df["Performance Date"], errors="coerce").dropna()
     if dates.empty:
-        return 0.0, 0.0, None
+        return DashboardTargetSelection(
+            monthly_target=0.0,
+            annual_target=0.0,
+            has_monthly_target=False,
+            has_annual_target=False,
+            source="Target Excel",
+            message="当前销售数据没有有效日期，无法匹配目标年月。",
+        )
     anchor = dates.max()
     year_targets = targets[targets["Year"].astype("Int64").eq(int(anchor.year))].copy()
     if year_targets.empty:
-        return 0.0, 0.0, None
-    revised = pd.to_numeric(year_targets["Revised Target"], errors="coerce").fillna(
-        pd.to_numeric(year_targets["Original Target"], errors="coerce")
-    )
-    year_targets = year_targets.assign(_revised=revised.fillna(0.0))
+        return DashboardTargetSelection(
+            monthly_target=0.0,
+            annual_target=0.0,
+            has_monthly_target=False,
+            has_annual_target=False,
+            source="Target Excel",
+            message=f"Target Excel 中没有 {int(anchor.year)} 年目标数据。",
+        )
+    revised = pd.to_numeric(year_targets.get("Revised Target"), errors="coerce")
+    original = pd.to_numeric(year_targets.get("Original Target"), errors="coerce")
+    target_values = revised.fillna(original)
+    year_targets = year_targets.assign(_target_value=target_values)
     month_rows = year_targets[year_targets["Month"].astype(int).eq(int(anchor.month))]
-    monthly_target = float(month_rows["_revised"].iloc[-1]) if not month_rows.empty else 0.0
-    annual_target = float(year_targets["_revised"].sum())
-    return monthly_target, annual_target, "经营追踪目标"
+    monthly_values = pd.to_numeric(month_rows["_target_value"], errors="coerce").dropna()
+    annual_values = pd.to_numeric(year_targets["_target_value"], errors="coerce").dropna()
+    has_monthly_target = not monthly_values.empty
+    has_annual_target = not annual_values.empty
+    monthly_target = float(monthly_values.iloc[-1]) if has_monthly_target else 0.0
+    annual_target = float(annual_values.sum()) if has_annual_target else 0.0
+    message = None
+    if not has_monthly_target:
+        message = f"Target Excel 中没有 {int(anchor.year)} 年 {int(anchor.month)} 月目标数据。"
+    elif not has_annual_target:
+        message = f"Target Excel 中没有 {int(anchor.year)} 年年度目标数据。"
+    return DashboardTargetSelection(
+        monthly_target=monthly_target,
+        annual_target=annual_target,
+        has_monthly_target=has_monthly_target,
+        has_annual_target=has_annual_target,
+        source="Target Excel",
+        message=message,
+    )
 
 
 def business_status(metrics: BusinessDashboardMetrics) -> tuple[str, str]:
     if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
-        return "尚未设置目标", "info"
+        return "未读取到目标数据", "info"
     if metrics.monthly_completion >= 1:
         return "领先目标节奏", "success"
     if metrics.pace_gap >= PACE_NORMAL_BAND:
@@ -343,7 +390,7 @@ def business_status(metrics: BusinessDashboardMetrics) -> tuple[str, str]:
 
 def generate_business_summary(metrics: BusinessDashboardMetrics) -> str:
     if metrics.monthly_target <= 0 or metrics.monthly_completion is None or metrics.pace_gap is None:
-        return "请先设置月度目标，以查看完成率和 Pace。"
+        return "未读取到目标数据。请检查 Google Drive 中的 Target 文件。"
 
     if metrics.monthly_completion >= 1:
         over_target = max(metrics.monthly_sales - metrics.monthly_target, 0.0)
@@ -631,37 +678,8 @@ def _scope_text(df: pd.DataFrame) -> str:
 
 
 def render_business_dashboard(df: pd.DataFrame) -> None:
-    session_monthly_target, session_annual_target, target_source = _session_targets_for_anchor(df)
-    with st.sidebar:
-        with st.expander("经营目标", expanded=True):
-            if target_source:
-                monthly_target = session_monthly_target
-                annual_target = session_annual_target
-                st.caption(f"当前使用：{target_source}")
-                st.caption(f"月度目标：{money(monthly_target)}")
-                st.caption(f"年度目标：{money(annual_target)}")
-                safe_page_link("pages/4_经营追踪.py", label="前往销售经营调整目标")
-            else:
-                monthly_target = st.number_input(
-                    "月度目标",
-                    min_value=0.0,
-                    value=float(st.session_state.get("home_monthly_target", 0.0)),
-                    step=10000.0,
-                    format="%.0f",
-                    key="home_monthly_target",
-                )
-                annual_target = st.number_input(
-                    "年度目标（自然年）",
-                    min_value=0.0,
-                    value=float(st.session_state.get("home_annual_target", 0.0)),
-                    step=50000.0,
-                    format="%.0f",
-                    key="home_annual_target",
-                )
-                safe_page_link("pages/4_经营追踪.py", label="前往销售经营设置目标")
-            st.caption("年度范围为1月1日至12月31日。")
-
-    metrics = cached_business_dashboard_metrics(df, monthly_target, annual_target)
+    targets = _target_excel_for_anchor(df)
+    metrics = cached_business_dashboard_metrics(df, targets.monthly_target, targets.annual_target)
     if metrics.anchor_date is None:
         st.info("当前筛选结果没有有效日期，无法计算经营驾驶舱指标。")
         return
@@ -673,8 +691,8 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
 
     status_text, status_level = business_status(metrics)
     _render_business_alert("当前经营状态", f"{status_text}。{generate_business_summary(metrics)}", status_level)
-    if status_level == "info" and metrics.monthly_target <= 0:
-        safe_page_link("pages/4_经营追踪.py", label="前往销售经营设置目标")
+    if targets.message:
+        st.warning(f"⚠️ {targets.message}")
 
     section_header("销售与目标进度")
     _render_executive_kpis(metrics)
