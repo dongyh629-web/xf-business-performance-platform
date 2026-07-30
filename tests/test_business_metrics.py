@@ -71,6 +71,7 @@ class BusinessMetricsTests(unittest.TestCase):
         self.assertEqual(700.0, kpis["Commercial Cost"])
         self.assertEqual(300.0, kpis["Commercial Gross Profit"])
         self.assertAlmostEqual(0.30, kpis["Commercial Gross Margin"])
+        self.assertEqual(10.0, kpis["ASP"])
         self.assertEqual(100.0, kpis["Zero-value Outbound Cost"])
         self.assertEqual(200.0, kpis["Contribution After Zero-value Cost"])
         self.assertNotAlmostEqual(0.20, kpis["Commercial Gross Margin"])
@@ -97,6 +98,42 @@ class BusinessMetricsTests(unittest.TestCase):
         self.assertEqual(0.0, kpis["Commercial Sales"])
         self.assertIsNone(kpis["Commercial Gross Margin"])
         self.assertEqual(30.0, kpis["Zero-value Outbound Cost"])
+
+    def test_uncosted_normal_sales_do_not_enter_gross_profit(self) -> None:
+        snapshot = _snapshot(
+            [
+                {"Product Code": "A", "Unit Cost": 70, "Effective From": "2026-07-01"},
+                {"Product Code": "Z", "Unit Cost": 10, "Effective From": "2026-07-01"},
+            ]
+        )
+        sales = pd.DataFrame(
+            {
+                "Completed Date": pd.to_datetime(["2026-07-02", "2026-07-02", "2026-07-02"]),
+                "Customer": ["C1", "C1", "C1"],
+                "Product Code": ["A", "B", "Z"],
+                "Quantity": [1, 1, 1],
+                "Sales Amount": [100, 200, 0],
+            }
+        )
+        metrics = build_business_metrics_dataframe(sales, [snapshot])
+        kpis = profitability_kpis(metrics)
+        self.assertEqual(300.0, kpis["Total Sales"])
+        self.assertEqual(300.0, kpis["Normal Sales"])
+        self.assertEqual(100.0, kpis["Costed Normal Sales"])
+        self.assertEqual(200.0, kpis["Uncosted Sales"])
+        self.assertEqual(70.0, kpis["Normal Cost"])
+        self.assertEqual(30.0, kpis["Commercial Gross Profit"])
+        self.assertAlmostEqual(0.30, kpis["Commercial Gross Margin"])
+        self.assertEqual(10.0, kpis["Zero-value Outbound Cost"])
+        self.assertEqual(20.0, kpis["Business Profit"])
+
+        customers = aggregate_customer_profitability(metrics)
+        customer = customers.iloc[0]
+        self.assertEqual(300.0, customer["Sales Amount"])
+        self.assertEqual(100.0, customer["Costed Normal Sales"])
+        self.assertEqual(200.0, customer["Uncosted Sales"])
+        self.assertEqual(30.0, customer["Commercial Gross Profit"])
+        self.assertAlmostEqual(0.30, customer["Commercial Gross Margin"])
 
     def test_quantity_zero_keeps_profit_empty(self) -> None:
         snapshot = _snapshot([{"Product Code": "A", "Unit Cost": 4, "Effective From": "2026-07-01"}])
@@ -219,6 +256,7 @@ class BusinessMetricsTests(unittest.TestCase):
         self.assertEqual(6.0, alpha["Gross Profit"])
         customer = aggregate_customer_profitability(metrics)
         self.assertEqual(2, int(customer.loc[customer["Customer"].eq("C1"), "Sales Rows"].iloc[0]))
+        self.assertEqual(6.0, float(customer.loc[customer["Customer"].eq("C1"), "ASP"].iloc[0]))
         group = aggregate_product_group_profitability(metrics)
         self.assertEqual({"Group A", "Group B"}, set(group["Product Group"].tolist()))
 

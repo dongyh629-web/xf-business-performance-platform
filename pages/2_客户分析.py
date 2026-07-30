@@ -4,16 +4,17 @@ import pandas as pd
 import streamlit as st
 
 from app.auth import require_login
+from app.business_metrics import aggregate_customer_profitability, build_business_metrics_dataframe, profitability_kpis
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
 from app.customer_metrics import abc_distribution, build_customer_summary, concentration_metrics
 from app.data import monthly_sales, top_entity_table, top_table
-from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
+from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_data_source_sidebar
 from app.ui import bar_chart, date_text, days, donut_chart, inject_global_styles, line_chart, metric_cards, metric_row, money, percent, section_header, show_code_warning, show_context_summary, show_filters
 
 
 def money_or_na(value) -> str:
     if pd.isna(value):
-        return "暂无毛利字段"
+        return "N/A"
     return money(float(value))
 
 
@@ -85,6 +86,39 @@ def _iqr_text(value: object) -> str:
     return f"{money(low)} ~ {money(high)}"
 
 
+@st.cache_data(show_spinner=False)
+def _cached_business_metrics(sales_data: pd.DataFrame, snapshots: list) -> pd.DataFrame:
+    return build_business_metrics_dataframe(sales_data, snapshots)
+
+
+def _merge_customer_profitability(customer_summary: pd.DataFrame, metrics_df: pd.DataFrame) -> pd.DataFrame:
+    if customer_summary.empty:
+        return customer_summary
+    profit = aggregate_customer_profitability(metrics_df)
+    if profit.empty:
+        result = customer_summary.copy()
+        for column in ["Costed Normal Sales", "Commercial Gross Profit", "Commercial Gross Margin", "Commercial Cost", "ASP"]:
+            result[column] = pd.NA
+        return result
+    merge_key = "Customer Label" if "Customer Label" in customer_summary.columns else "Customer Name"
+    profit_columns = [
+        "Customer",
+        "Costed Normal Sales",
+        "Commercial Gross Profit",
+        "Commercial Gross Margin",
+        "Commercial Cost",
+        "ASP",
+        "Zero-value Outbound Cost",
+        "Cost Coverage",
+    ]
+    return customer_summary.merge(
+        profit[[column for column in profit_columns if column in profit.columns]],
+        left_on=merge_key,
+        right_on="Customer",
+        how="left",
+    ).drop(columns=["Customer"], errors="ignore")
+
+
 st.set_page_config(page_title="客户分析", layout="wide")
 inject_global_styles()
 require_login("customer_analysis")
@@ -101,19 +135,28 @@ if df is None:
     st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
     st.stop()
 
-filtered = show_filters(df, "customers")
+try:
+    _registry, cost_snapshots = load_drive_cost_snapshots(force=False)
+except DriveUserError as exc:
+    st.warning(f"成本快照暂不可用，客户毛利字段将显示为 N/A。{exc}")
+    cost_snapshots = []
+
+metrics_df = _cached_business_metrics(df, cost_snapshots)
+filtered = show_filters(metrics_df, "customers")
 show_code_warning(filtered)
 show_context_summary(filtered)
 
 st.caption("以下客户等级和购买行为基于当前所选日期口径、日期范围、客户类型及产品组计算。筛选某个产品组后，销售额、产品覆盖和 ABC 均按筛选后口径动态计算。")
 
 customer_summary, conflicts = build_customer_summary(filtered)
+customer_summary = _merge_customer_profitability(customer_summary, filtered)
 concentration = concentration_metrics(customer_summary)
 total_sales = float(filtered["Sales Amount"].sum())
 order_count = int(filtered["Order No."].nunique())
 avg_order = total_sales / order_count if order_count else 0
 customer_count = int(customer_summary["Customer Key"].nunique()) if not customer_summary.empty else 0
 order_metrics = _order_amount_metrics(filtered, customer_summary)
+profit_kpis = profitability_kpis(filtered)
 
 metric_cards(
     [
@@ -122,6 +165,14 @@ metric_cards(
         ("客户数", f"{customer_count:,}"),
         ("平均订单金额", money(avg_order)),
         ("订单金额中位数", _money_or_sample_text(order_metrics["median_order_value"])),
+    ]
+)
+metric_cards(
+    [
+        ("毛利", money_or_na(profit_kpis["Commercial Gross Profit"])),
+        ("毛利率", percent_or_na(profit_kpis["Commercial Gross Margin"])),
+        ("成本", money_or_na(profit_kpis["Commercial Cost"])),
+        ("ASP", money_or_na(profit_kpis["ASP"])),
     ]
 )
 metric_cards(
@@ -171,15 +222,16 @@ if customer_summary.empty:
     st.info("当前筛选范围内没有客户汇总数据。")
 else:
     table = customer_summary.copy()
-    has_gross_profit = "Gross Profit" in table.columns and table["Gross Profit"].notna().any()
-    if not has_gross_profit:
-        st.caption("当前源文件未识别到 Gross Profit / 毛利字段，表格中毛利显示为“暂无毛利字段”。")
     display = pd.DataFrame(
         {
             "客户名称": table["Customer Name"].fillna(""),
             "客户代码": table["Customer Code"].fillna(table["Customer Key"]),
             "销售额": table["Total Sales"],
-            "毛利": table["Gross Profit"] if "Gross Profit" in table.columns else pd.NA,
+            "已核算销售": table["Costed Normal Sales"] if "Costed Normal Sales" in table.columns else pd.NA,
+            "毛利": table["Commercial Gross Profit"] if "Commercial Gross Profit" in table.columns else pd.NA,
+            "毛利率": table["Commercial Gross Margin"] if "Commercial Gross Margin" in table.columns else pd.NA,
+            "成本": table["Commercial Cost"] if "Commercial Cost" in table.columns else pd.NA,
+            "ASP": table["ASP"] if "ASP" in table.columns else pd.NA,
             "订单数": table["Order Count"],
             "平均订单金额": table["Average Order Value"],
             "ABC 等级": table["ABC Class"],
@@ -207,7 +259,11 @@ else:
 
     sort_options = {
         "销售额（高到低）": ("销售额", False),
+        "已核算销售（高到低）": ("已核算销售", False),
         "毛利（高到低）": ("毛利", False),
+        "毛利率（高到低）": ("毛利率", False),
+        "成本（高到低）": ("成本", False),
+        "ASP（高到低）": ("ASP", False),
         "同比增长（高到低）": ("同比增长", False),
         "销售贡献率（高到低）": ("销售贡献率", False),
         "订单数（高到低）": ("订单数", False),
@@ -230,7 +286,7 @@ else:
     filtered_table = filtered_table[filtered_table["客户类型"].isin(selected_types)]
 
     sort_col, ascending = sort_options[sort_label]
-    if sort_col in ["毛利", "同比增长"]:
+    if sort_col in ["已核算销售", "毛利", "毛利率", "成本", "ASP", "同比增长"]:
         filtered_table = filtered_table.assign(_sort_value=pd.to_numeric(filtered_table[sort_col], errors="coerce").fillna(float("-inf")))
         filtered_table = filtered_table.sort_values("_sort_value", ascending=ascending).drop(columns=["_sort_value"])
     else:
@@ -250,7 +306,11 @@ else:
     else:
         formatted_table = filtered_table.copy()
         formatted_table["销售额"] = formatted_table["销售额"].map(money)
+        formatted_table["已核算销售"] = formatted_table["已核算销售"].map(money_or_na)
         formatted_table["毛利"] = formatted_table["毛利"].map(money_or_na)
+        formatted_table["毛利率"] = formatted_table["毛利率"].map(percent_or_na)
+        formatted_table["成本"] = formatted_table["成本"].map(money_or_na)
+        formatted_table["ASP"] = formatted_table["ASP"].map(money_or_na)
         formatted_table["同比增长"] = formatted_table["同比增长"].map(percent_or_na)
         formatted_table["销售贡献率"] = formatted_table["销售贡献率"].map(percent)
         formatted_table["平均订单金额"] = formatted_table["平均订单金额"].map(money)
@@ -269,7 +329,11 @@ else:
                     "客户名称",
                     "客户代码",
                     "销售额",
+                    "已核算销售",
                     "毛利",
+                    "毛利率",
+                    "成本",
+                    "ASP",
                     "订单数",
                     "平均订单金额",
                     "ABC 等级",

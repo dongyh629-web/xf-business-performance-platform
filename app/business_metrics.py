@@ -211,31 +211,40 @@ def profitability_kpis(metrics_df: pd.DataFrame) -> dict[str, float | None]:
     gross_profit = _numeric_column(metrics_df, "Gross Profit")
     total_cost = _numeric_column(metrics_df, "Total Cost")
     profit_calculated = gross_profit.notna()
-    commercial = sales_amount.gt(0)
-    commercial_costed = commercial & total_cost.notna()
+    normal_sales_mask = sales_amount.gt(0)
+    costed_normal_mask = normal_sales_mask & total_cost.notna()
     zero_value_costed = sales_amount.eq(0) & total_cost.notna()
+    quantity = _numeric_column(metrics_df, "Quantity").fillna(0)
     total_sales = float(sales_amount.sum())
-    costed_sales = float(sales_amount[profit_calculated].sum())
+    costed_sales = float(sales_amount[costed_normal_mask].sum())
     gross_profit_sum = float(gross_profit[profit_calculated].sum())
-    commercial_sales = float(sales_amount[commercial].sum())
-    commercial_cost = float(total_cost[commercial_costed].sum())
-    commercial_gross_profit = commercial_sales - commercial_cost if commercial_sales else None
-    commercial_margin = commercial_gross_profit / commercial_sales if commercial_sales and commercial_gross_profit is not None else None
+    normal_sales = float(sales_amount[normal_sales_mask].sum())
+    normal_quantity = float(quantity[normal_sales_mask].sum())
+    normal_cost = float(total_cost[costed_normal_mask].sum())
+    normal_gross_profit = costed_sales - normal_cost if costed_sales else None
+    normal_margin = normal_gross_profit / costed_sales if costed_sales and normal_gross_profit is not None else None
     zero_value_cost = float(total_cost[zero_value_costed].sum())
+    business_profit = normal_gross_profit - zero_value_cost if normal_gross_profit is not None else None
+    uncosted_sales = normal_sales - costed_sales
     return {
         "Total Sales": total_sales,
         "Costed Sales": costed_sales,
-        "Uncosted Sales": total_sales - costed_sales,
-        "Total Cost": float(total_cost[profit_calculated].sum()),
-        "Gross Profit": gross_profit_sum if costed_sales else None,
-        "Weighted Margin": gross_profit_sum / costed_sales if costed_sales > 0 else None,
+        "Normal Sales": normal_sales,
+        "Costed Normal Sales": costed_sales,
+        "Uncosted Sales": uncosted_sales,
+        "Normal Cost": normal_cost,
+        "Total Cost": normal_cost,
+        "Gross Profit": normal_gross_profit,
+        "Weighted Margin": normal_margin,
         "Cost Coverage": costed_sales / total_sales if total_sales > 0 else 0.0,
-        "Commercial Sales": commercial_sales,
-        "Commercial Cost": commercial_cost,
-        "Commercial Gross Profit": commercial_gross_profit,
-        "Commercial Gross Margin": commercial_margin,
+        "Commercial Sales": normal_sales,
+        "Commercial Cost": normal_cost,
+        "Commercial Gross Profit": normal_gross_profit,
+        "Commercial Gross Margin": normal_margin,
+        "ASP": normal_sales / normal_quantity if normal_quantity else None,
         "Zero-value Outbound Cost": zero_value_cost,
-        "Contribution After Zero-value Cost": commercial_gross_profit - zero_value_cost if commercial_gross_profit is not None else None,
+        "Business Profit": business_profit,
+        "Contribution After Zero-value Cost": business_profit,
     }
 
 
@@ -244,6 +253,10 @@ def monthly_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
         "Month",
         "Total Sales",
         "Costed Sales",
+        "Normal Sales",
+        "Costed Normal Sales",
+        "Uncosted Sales",
+        "Normal Cost",
         "Gross Profit",
         "Weighted Margin",
         "Cost Coverage",
@@ -252,6 +265,7 @@ def monthly_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
         "Commercial Gross Profit",
         "Commercial Gross Margin",
         "Zero-value Outbound Cost",
+        "Business Profit",
         "Contribution After Zero-value Cost",
     ]
     if metrics_df.empty:
@@ -266,29 +280,33 @@ def monthly_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for month, group in data.groupby("Month", dropna=False):
         total_sales = float(group["Sales Amount"].sum())
-        costed = group[group["_profit_calculated"]]
-        costed_sales = float(costed["Sales Amount"].sum())
-        gross_profit = float(costed["Gross Profit"].sum()) if costed_sales else 0.0
-        commercial = group["Sales Amount"].gt(0)
-        commercial_costed = commercial & group["Total Cost"].notna()
-        commercial_sales = float(group.loc[commercial, "Sales Amount"].sum())
-        commercial_cost = float(group.loc[commercial_costed, "Total Cost"].sum())
-        commercial_profit = commercial_sales - commercial_cost if commercial_sales else pd.NA
+        normal = group["Sales Amount"].gt(0)
+        costed_normal = normal & group["Total Cost"].notna()
+        normal_sales = float(group.loc[normal, "Sales Amount"].sum())
+        costed_sales = float(group.loc[costed_normal, "Sales Amount"].sum())
+        normal_cost = float(group.loc[costed_normal, "Total Cost"].sum())
+        gross_profit = costed_sales - normal_cost if costed_sales else pd.NA
         zero_cost = float(group.loc[group["Sales Amount"].eq(0) & group["Total Cost"].notna(), "Total Cost"].sum())
+        business_profit = gross_profit - zero_cost if costed_sales else pd.NA
         rows.append(
             {
                 "Month": month,
                 "Total Sales": total_sales,
                 "Costed Sales": costed_sales,
-                "Gross Profit": gross_profit if costed_sales else pd.NA,
+                "Normal Sales": normal_sales,
+                "Costed Normal Sales": costed_sales,
+                "Uncosted Sales": normal_sales - costed_sales,
+                "Normal Cost": normal_cost,
+                "Gross Profit": gross_profit,
                 "Weighted Margin": gross_profit / costed_sales if costed_sales else pd.NA,
                 "Cost Coverage": costed_sales / total_sales if total_sales else 0.0,
-                "Commercial Sales": commercial_sales,
-                "Commercial Cost": commercial_cost,
-                "Commercial Gross Profit": commercial_profit,
-                "Commercial Gross Margin": commercial_profit / commercial_sales if commercial_sales else pd.NA,
+                "Commercial Sales": normal_sales,
+                "Commercial Cost": normal_cost,
+                "Commercial Gross Profit": gross_profit,
+                "Commercial Gross Margin": gross_profit / costed_sales if costed_sales else pd.NA,
                 "Zero-value Outbound Cost": zero_cost,
-                "Contribution After Zero-value Cost": commercial_profit - zero_cost if commercial_sales else pd.NA,
+                "Business Profit": business_profit,
+                "Contribution After Zero-value Cost": business_profit,
             }
         )
     return pd.DataFrame(rows, columns=columns).sort_values("Month").reset_index(drop=True)
@@ -302,19 +320,29 @@ def _status_summary(status: pd.Series) -> str:
 def _commercial_summary(group: pd.DataFrame) -> dict[str, float | None]:
     sales = _numeric_column(group, "Sales Amount").fillna(0)
     total_cost = _numeric_column(group, "Total Cost")
-    commercial = sales.gt(0)
-    commercial_costed = commercial & total_cost.notna()
-    commercial_sales = float(sales[commercial].sum())
-    commercial_cost = float(total_cost[commercial_costed].sum())
-    commercial_profit = commercial_sales - commercial_cost if commercial_sales else None
+    quantity = _numeric_column(group, "Quantity").fillna(0)
+    normal = sales.gt(0)
+    costed_normal = normal & total_cost.notna()
+    normal_sales = float(sales[normal].sum())
+    costed_normal_sales = float(sales[costed_normal].sum())
+    normal_cost = float(total_cost[costed_normal].sum())
+    normal_quantity = float(quantity[normal].sum())
+    gross_profit = costed_normal_sales - normal_cost if costed_normal_sales else None
     zero_cost = float(total_cost[sales.eq(0) & total_cost.notna()].sum())
+    business_profit = gross_profit - zero_cost if gross_profit is not None else None
     return {
-        "Commercial Sales": commercial_sales,
-        "Commercial Cost": commercial_cost,
-        "Commercial Gross Profit": commercial_profit,
-        "Commercial Gross Margin": commercial_profit / commercial_sales if commercial_sales and commercial_profit is not None else None,
+        "Normal Sales": normal_sales,
+        "Costed Normal Sales": costed_normal_sales,
+        "Uncosted Sales": normal_sales - costed_normal_sales,
+        "Normal Cost": normal_cost,
+        "Commercial Sales": normal_sales,
+        "Commercial Cost": normal_cost,
+        "Commercial Gross Profit": gross_profit,
+        "Commercial Gross Margin": gross_profit / costed_normal_sales if costed_normal_sales and gross_profit is not None else None,
+        "ASP": normal_sales / normal_quantity if normal_quantity else None,
         "Zero-value Outbound Cost": zero_cost,
-        "Contribution After Zero-value Cost": commercial_profit - zero_cost if commercial_profit is not None else None,
+        "Business Profit": business_profit,
+        "Contribution After Zero-value Cost": business_profit,
     }
 
 
@@ -330,11 +358,17 @@ def aggregate_product_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
         "Total Cost",
         "Gross Profit",
         "Weighted Margin",
+        "Normal Sales",
+        "Costed Normal Sales",
+        "Uncosted Sales",
+        "Normal Cost",
         "Commercial Sales",
         "Commercial Cost",
         "Commercial Gross Profit",
         "Commercial Gross Margin",
+        "ASP",
         "Zero-value Outbound Cost",
+        "Business Profit",
         "Contribution After Zero-value Cost",
         "Cost Coverage",
         "Sales Rows",
@@ -351,14 +385,15 @@ def aggregate_product_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     data["Total Cost"] = _numeric_column(data, "Total Cost")
     data["Gross Profit"] = _numeric_column(data, "Gross Profit")
     data["Unit Cost"] = _numeric_column(data, "Unit Cost")
-    data["_profit_calculated"] = data["Gross Profit"].notna()
+    data["_normal_costed"] = data["Sales Amount"].gt(0) & data["Total Cost"].notna()
     rows = []
     for product_code, group in data.groupby("_Product Code", dropna=False):
-        costed = group[group["_profit_calculated"]]
+        costed = group[group["_normal_costed"]]
         commercial_summary = _commercial_summary(group)
         total_sales = float(group["Sales Amount"].sum())
         costed_sales = float(costed["Sales Amount"].sum())
-        gross_profit = float(costed["Gross Profit"].sum()) if costed_sales else pd.NA
+        normal_cost = float(costed["Total Cost"].sum()) if costed_sales else pd.NA
+        gross_profit = costed_sales - normal_cost if costed_sales else pd.NA
         total_cost = float(costed["Total Cost"].sum()) if costed_sales else pd.NA
         quantity = float(group["Quantity"].sum())
         costed_quantity = float(costed["Quantity"].sum())
@@ -391,11 +426,17 @@ def aggregate_customer_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
         "Total Cost",
         "Gross Profit",
         "Weighted Margin",
+        "Normal Sales",
+        "Costed Normal Sales",
+        "Uncosted Sales",
+        "Normal Cost",
         "Commercial Sales",
         "Commercial Cost",
         "Commercial Gross Profit",
         "Commercial Gross Margin",
+        "ASP",
         "Zero-value Outbound Cost",
+        "Business Profit",
         "Contribution After Zero-value Cost",
         "Cost Coverage",
         "Sales Rows",
@@ -410,21 +451,22 @@ def aggregate_customer_profitability(metrics_df: pd.DataFrame) -> pd.DataFrame:
     data["Sales Amount"] = _numeric_column(data, "Sales Amount").fillna(0)
     data["Total Cost"] = _numeric_column(data, "Total Cost")
     data["Gross Profit"] = _numeric_column(data, "Gross Profit")
-    data["_profit_calculated"] = data["Gross Profit"].notna()
+    data["_normal_costed"] = data["Sales Amount"].gt(0) & data["Total Cost"].notna()
     rows = []
     for customer, group in data.groupby("_Customer", dropna=False):
-        costed = group[group["_profit_calculated"]]
+        costed = group[group["_normal_costed"]]
         commercial_summary = _commercial_summary(group)
         total_sales = float(group["Sales Amount"].sum())
         costed_sales = float(costed["Sales Amount"].sum())
-        gross_profit = float(costed["Gross Profit"].sum()) if costed_sales else pd.NA
+        normal_cost = float(costed["Total Cost"].sum()) if costed_sales else pd.NA
+        gross_profit = costed_sales - normal_cost if costed_sales else pd.NA
         coverage = costed_sales / total_sales if total_sales else 0.0
         rows.append(
             {
                 "Customer": customer,
                 "Sales Amount": total_sales,
                 "Costed Sales": costed_sales,
-                "Total Cost": float(costed["Total Cost"].sum()) if costed_sales else pd.NA,
+                "Total Cost": normal_cost,
                 "Gross Profit": gross_profit,
                 "Weighted Margin": gross_profit / costed_sales if costed_sales else pd.NA,
                 **commercial_summary,
@@ -448,20 +490,21 @@ def aggregate_product_group_profitability(metrics_df: pd.DataFrame) -> pd.DataFr
     data["Sales Amount"] = _numeric_column(data, "Sales Amount").fillna(0)
     data["Total Cost"] = _numeric_column(data, "Total Cost")
     data["Gross Profit"] = _numeric_column(data, "Gross Profit")
-    data["_profit_calculated"] = data["Gross Profit"].notna()
+    data["_normal_costed"] = data["Sales Amount"].gt(0) & data["Total Cost"].notna()
     rows = []
     for group_name, group in data.groupby("_Product Group", dropna=False):
-        costed = group[group["_profit_calculated"]]
+        costed = group[group["_normal_costed"]]
         commercial_summary = _commercial_summary(group)
         total_sales = float(group["Sales Amount"].sum())
         costed_sales = float(costed["Sales Amount"].sum())
-        gross_profit = float(costed["Gross Profit"].sum()) if costed_sales else pd.NA
+        normal_cost = float(costed["Total Cost"].sum()) if costed_sales else pd.NA
+        gross_profit = costed_sales - normal_cost if costed_sales else pd.NA
         rows.append(
             {
                 "Product Group": group_name,
                 "Sales Amount": total_sales,
                 "Costed Sales": costed_sales,
-                "Total Cost": float(costed["Total Cost"].sum()) if costed_sales else pd.NA,
+                "Total Cost": normal_cost,
                 "Gross Profit": gross_profit,
                 "Weighted Margin": gross_profit / costed_sales if costed_sales else pd.NA,
                 **commercial_summary,
