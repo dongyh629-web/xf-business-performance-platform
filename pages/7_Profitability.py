@@ -30,7 +30,7 @@ from app.profitability_table_styles import (
     status_cell_style,
     zero_value_cost_style,
 )
-from app.ui import current_data_year_range, inject_global_styles, money, percent, section_header, style_plotly
+from app.ui import inject_global_styles, money, percent, render_date_range_inputs, section_header, style_plotly
 
 
 LOGGER = logging.getLogger(__name__)
@@ -265,22 +265,22 @@ def _completed_date_filter(data: pd.DataFrame) -> pd.DataFrame:
     dates = pd.to_datetime(data["Completed Date"], errors="coerce")
     min_date = dates.dropna().min()
     max_date = dates.dropna().max()
+    if pd.notna(min_date) and pd.notna(max_date):
+        selected = render_date_range_inputs(
+            "完成日期范围 / Completed Date",
+            "profitability_completed",
+            min_date.date(),
+            max_date.date(),
+            legacy_key="profitability_completed_date_range",
+        )
+        if selected is not None:
+            start, end = pd.Timestamp(selected[0]), pd.Timestamp(selected[1])
+            normalized = dates.dt.normalize()
+            filtered = data.loc[normalized.between(start, end, inclusive="both")]
+
     with st.sidebar:
         st.markdown("### 利润筛选")
         st.caption("Profitability Filters")
-        if pd.notna(min_date) and pd.notna(max_date):
-            selected = st.date_input(
-                "完成日期范围 / Completed Date",
-                value=current_data_year_range(min_date.date(), max_date.date()),
-                min_value=min_date.date(),
-                max_value=max_date.date(),
-                key="profitability_completed_date_range",
-            )
-            if isinstance(selected, tuple) and len(selected) == 2:
-                start, end = pd.Timestamp(selected[0]), pd.Timestamp(selected[1])
-                normalized = dates.dt.normalize()
-                filtered = data.loc[normalized.between(start, end, inclusive="both")]
-
         product_groups = sorted(filtered["Product Group"].fillna("未分类").astype(str).unique().tolist()) if "Product Group" in filtered.columns else []
         with st.expander("产品系列 / Product Group", expanded=False):
             selected_groups = st.multiselect("产品系列", product_groups, default=product_groups, key="profitability_product_group")

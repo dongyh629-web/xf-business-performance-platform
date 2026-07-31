@@ -851,9 +851,110 @@ def _first_valid_date(df: pd.DataFrame, col: str):
     return values.min().date(), values.max().date()
 
 
+DATE_FILTER_DEFAULT_VERSION = 2
+
+
+def _date_value(value):
+    if value is None or pd.isna(value):
+        return None
+    return pd.Timestamp(value).date()
+
+
+def _date_range_keys(key_prefix: str) -> tuple[str, str, str, str]:
+    return (
+        f"{key_prefix}_start_date",
+        f"{key_prefix}_end_date",
+        f"{key_prefix}_date_default_version",
+        f"{key_prefix}_date_user_modified",
+    )
+
+
+def _date_default_keys(key_prefix: str) -> tuple[str, str]:
+    return f"{key_prefix}_default_start_date", f"{key_prefix}_default_end_date"
+
+
+def _coerce_legacy_range(value) -> tuple[date, date] | None:
+    if not isinstance(value, tuple) or len(value) != 2:
+        return None
+    start, end = _date_value(value[0]), _date_value(value[1])
+    if start is None or end is None:
+        return None
+    return start, end
+
+
+def _clamp_date_range(selected: tuple[date, date], min_date, max_date) -> tuple[date, date]:
+    earliest = pd.Timestamp(min_date).date()
+    latest = pd.Timestamp(max_date).date()
+    start, end = selected
+    start = max(earliest, min(start, latest))
+    end = max(earliest, min(end, latest))
+    if start > end:
+        end = start
+    return start, end
+
+
+def initialize_date_range_state(key_prefix: str, min_date, max_date, legacy_key: str | None = None) -> tuple[date, date] | None:
+    default_range = current_data_year_range(min_date, max_date)
+    if default_range is None:
+        return None
+
+    start_key, end_key, version_key, modified_key = _date_range_keys(key_prefix)
+    default_start_key, default_end_key = _date_default_keys(key_prefix)
+    legacy_range = _coerce_legacy_range(st.session_state.get(legacy_key or f"{key_prefix}_date_range"))
+    full_history_range = (_date_value(min_date), _date_value(max_date))
+    previous_default_range = None
+    previous_default_start = _date_value(st.session_state.get(default_start_key))
+    previous_default_end = _date_value(st.session_state.get(default_end_key))
+    if previous_default_start is not None and previous_default_end is not None:
+        previous_default_range = (previous_default_start, previous_default_end)
+    current_range = None
+    if start_key in st.session_state and end_key in st.session_state:
+        start, end = _date_value(st.session_state.get(start_key)), _date_value(st.session_state.get(end_key))
+        if start is not None and end is not None:
+            current_range = (start, end)
+
+    upgraded = st.session_state.get(version_key) != DATE_FILTER_DEFAULT_VERSION
+    user_modified = bool(st.session_state.get(modified_key, False))
+
+    if upgraded:
+        if current_range and current_range != full_history_range:
+            selected = current_range
+            user_modified = current_range != default_range
+        elif legacy_range and legacy_range != full_history_range:
+            selected = legacy_range
+            user_modified = legacy_range != default_range
+        else:
+            selected = default_range
+            user_modified = False
+    elif not user_modified:
+        if current_range and previous_default_range and current_range != previous_default_range:
+            selected = current_range
+            user_modified = current_range != default_range
+        else:
+            selected = default_range
+    else:
+        selected = current_range or default_range
+
+    selected = _clamp_date_range(selected, min_date, max_date)
+    st.session_state[start_key] = selected[0]
+    st.session_state[end_key] = selected[1]
+    st.session_state[version_key] = DATE_FILTER_DEFAULT_VERSION
+    st.session_state[modified_key] = user_modified and selected != default_range
+    st.session_state[default_start_key], st.session_state[default_end_key] = default_range
+    return selected
+
+
 def _reset_filter_state(key_prefix: str, min_date, max_date) -> None:
     st.session_state["date_basis"] = "Completed Date"
-    st.session_state[f"{key_prefix}_date_range"] = current_data_year_range(min_date, max_date)
+    default_range = current_data_year_range(min_date, max_date)
+    start_key, end_key, version_key, modified_key = _date_range_keys(key_prefix)
+    default_start_key, default_end_key = _date_default_keys(key_prefix)
+    if default_range:
+        st.session_state[start_key], st.session_state[end_key] = default_range
+        st.session_state[default_start_key], st.session_state[default_end_key] = default_range
+    st.session_state[f"{key_prefix}_date_range"] = default_range
+    st.session_state[version_key] = DATE_FILTER_DEFAULT_VERSION
+    st.session_state[modified_key] = False
     st.session_state[f"{key_prefix}_all_customer_types"] = True
     st.session_state[f"{key_prefix}_all_product_groups"] = True
     st.session_state[f"{key_prefix}_selected_customer_types"] = []
@@ -861,14 +962,55 @@ def _reset_filter_state(key_prefix: str, min_date, max_date) -> None:
 
 
 def current_data_year_range(min_date, max_date):
-    if not min_date or not max_date:
+    earliest = _date_value(min_date)
+    latest = _date_value(max_date)
+    if earliest is None or latest is None:
         return None
-    latest = pd.Timestamp(max_date).date()
-    earliest = pd.Timestamp(min_date).date()
     start = date(latest.year, 1, 1)
     if start < earliest:
         start = earliest
     return start, latest
+
+
+def render_date_range_inputs(label: str, key_prefix: str, min_date, max_date, legacy_key: str | None = None) -> tuple[date, date] | None:
+    selected = initialize_date_range_state(key_prefix, min_date, max_date, legacy_key=legacy_key)
+    if selected is None:
+        return None
+    start_key, end_key, _, modified_key = _date_range_keys(key_prefix)
+    earliest = pd.Timestamp(min_date).date()
+    latest = pd.Timestamp(max_date).date()
+
+    st.markdown(f"### {label}")
+    col1, col2 = st.columns(2)
+    with col1:
+        start = st.date_input(
+            "开始日期",
+            min_value=earliest,
+            max_value=latest,
+            key=start_key,
+        )
+    start = _date_value(start)
+    if start is None:
+        return None
+    if _date_value(st.session_state.get(end_key)) is not None and _date_value(st.session_state.get(end_key)) < start:
+        st.session_state[end_key] = start
+    with col2:
+        end = st.date_input(
+            "结束日期",
+            min_value=start,
+            max_value=latest,
+            key=end_key,
+        )
+    end = _date_value(end)
+    if end is None:
+        return None
+    if start > end:
+        end = start
+        st.warning("开始日期不能晚于结束日期，已按开始日期作为结束日期。")
+    selected = _clamp_date_range((start, end), min_date, max_date)
+    default_range = current_data_year_range(min_date, max_date)
+    st.session_state[modified_key] = selected != default_range
+    return selected
 
 
 def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
@@ -896,19 +1038,18 @@ def show_filters(df: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
     customer_type_values = basis_df["Customer Type"].fillna("未分类").astype(str)
     product_group_values = basis_df["Product Group"].fillna("未分类").astype(str)
 
+    selected_range = None
+    if pd.notna(min_date) and pd.notna(max_date):
+        selected_range = render_date_range_inputs(
+            "日期范围",
+            key_prefix,
+            min_date.date(),
+            max_date.date(),
+            legacy_key=f"{key_prefix}_date_range",
+        )
+
     with st.sidebar:
         st.markdown("### 筛选")
-        if pd.notna(min_date) and pd.notna(max_date):
-            default_range = current_data_year_range(min_date.date(), max_date.date())
-            selected_range = st.date_input(
-                "日期范围",
-                value=default_range,
-                min_value=min_date.date(),
-                max_value=max_date.date(),
-                key=f"{key_prefix}_date_range",
-            )
-        else:
-            selected_range = None
         customer_types = sorted(customer_type_values.unique().tolist())
         product_groups = sorted(product_group_values.unique().tolist())
 
