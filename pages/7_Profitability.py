@@ -281,24 +281,46 @@ def _completed_date_filter(data: pd.DataFrame) -> pd.DataFrame:
     with st.sidebar:
         st.markdown("### 利润筛选")
         st.caption("Profitability Filters")
+        if st.button("Clear All", key="profitability_clear_filters", use_container_width=True):
+            st.session_state["profitability_all_product_groups"] = True
+            st.session_state["profitability_product_group"] = []
+            st.session_state["profitability_products"] = []
+            st.session_state["profitability_customers"] = []
+            st.rerun()
+
         product_groups = sorted(filtered["Product Group"].fillna("未分类").astype(str).unique().tolist()) if "Product Group" in filtered.columns else []
-        with st.expander("产品系列 / Product Group", expanded=False):
-            selected_groups = st.multiselect("产品系列", product_groups, default=product_groups, key="profitability_product_group")
-        if selected_groups and len(selected_groups) < len(product_groups):
-            filtered = filtered[filtered["Product Group"].fillna("未分类").astype(str).isin(selected_groups)]
+        all_groups = st.checkbox("全部产品系列", value=True, key="profitability_all_product_groups")
+        if all_groups:
+            selected_groups = product_groups
+            st.caption("产品系列：全部")
+        else:
+            with st.expander(f"产品系列：已选 {len(st.session_state.get('profitability_product_group', []))} 项", expanded=False):
+                selected_groups = st.multiselect(
+                    "产品系列",
+                    product_groups,
+                    default=st.session_state.get("profitability_product_group", []),
+                    key="profitability_product_group",
+                    placeholder="选择产品系列",
+                )
+                st.caption(f"已选 {len(selected_groups)} 项")
+        if not all_groups:
+            if selected_groups:
+                filtered = filtered[filtered["Product Group"].fillna("未分类").astype(str).isin(selected_groups)]
+            else:
+                filtered = filtered.iloc[0:0]
 
         product_label_col = "Product Label" if "Product Label" in filtered.columns else "Product"
         product_options = sorted(filtered[product_label_col].fillna("Unknown").astype(str).unique().tolist()) if product_label_col in filtered.columns else []
-        with st.expander("产品 / Product", expanded=False):
-            selected_products = st.multiselect("产品", product_options, default=[], key="profitability_products")
+        with st.expander(f"产品：已选 {len(st.session_state.get('profitability_products', []))} 项", expanded=False):
+            selected_products = st.multiselect("产品", product_options, default=[], key="profitability_products", placeholder="全部产品")
             st.caption("留空表示全部产品。")
         if selected_products:
             filtered = filtered[filtered[product_label_col].fillna("Unknown").astype(str).isin(selected_products)]
 
         customer_label_col = "Customer Label" if "Customer Label" in filtered.columns else "Customer"
         customer_options = sorted(filtered[customer_label_col].fillna("Unknown").astype(str).unique().tolist()) if customer_label_col in filtered.columns else []
-        with st.expander("客户 / Customer", expanded=False):
-            selected_customers = st.multiselect("客户", customer_options, default=[], key="profitability_customers")
+        with st.expander(f"客户：已选 {len(st.session_state.get('profitability_customers', []))} 项", expanded=False):
+            selected_customers = st.multiselect("客户", customer_options, default=[], key="profitability_customers", placeholder="全部客户")
             st.caption("留空表示全部客户。")
         if selected_customers:
             filtered = filtered[filtered[customer_label_col].fillna("Unknown").astype(str).isin(selected_customers)]
@@ -547,6 +569,43 @@ def _transaction_columns(data: pd.DataFrame) -> pd.DataFrame:
     return display.reset_index(drop=True)
 
 
+def _clear_product_profitability_filters() -> None:
+    st.session_state["product_profitability_all_groups"] = True
+    st.session_state["product_profitability_group_filter"] = []
+    st.session_state["product_profitability_product_filter"] = []
+    st.session_state["product_profitability_customer_filter"] = []
+
+
+def _multiselect_filter_panel(
+    title: str,
+    options: list[str],
+    key: str,
+    placeholder: str,
+    all_key: str | None = None,
+) -> tuple[list[str], bool]:
+    if not options:
+        st.caption(f"暂无{title}字段。")
+        return [], True
+    if all_key:
+        all_selected = st.checkbox(f"全部{title}", value=True, key=all_key)
+        if all_selected:
+            st.caption(f"{title}：全部")
+            return options, True
+    else:
+        all_selected = False
+    selected_count = len(st.session_state.get(key, []))
+    with st.expander(f"{title}：已选 {selected_count} 项", expanded=False):
+        selected = st.multiselect(
+            title,
+            options,
+            default=st.session_state.get(key, []),
+            key=key,
+            placeholder=placeholder,
+        )
+        st.caption("留空表示全部。" if not all_key else f"已选 {len(selected)} 项")
+    return selected, all_selected
+
+
 def _product_profitability_filters(data: pd.DataFrame) -> pd.DataFrame:
     if data.empty:
         return data
@@ -561,60 +620,56 @@ def _product_profitability_filters(data: pd.DataFrame) -> pd.DataFrame:
         if group_col in filtered_data.columns
         else []
     )
-    selected_groups: list[str] = []
+    clear_box, _ = st.columns([1, 4])
+    with clear_box:
+        if st.button("Clear All", key="product_profitability_clear_filters", use_container_width=True):
+            _clear_product_profitability_filters()
+            st.rerun()
+
     group_box, product_box, customer_box = st.columns(3)
     with group_box:
-        if group_options:
-            selected_groups = st.multiselect(
-                "产品系列 / Product Group",
-                group_options,
-                default=group_options,
-                key="product_profitability_group_filter",
-            )
-            if selected_groups and len(selected_groups) < len(group_options):
+        selected_groups, all_groups = _multiselect_filter_panel(
+            "产品系列 / Product Group",
+            group_options,
+            "product_profitability_group_filter",
+            "选择产品系列",
+            all_key="product_profitability_all_groups",
+        )
+        if not all_groups:
+            if selected_groups:
                 filtered_data = filtered_data[filtered_data[group_col].fillna("未分类").astype(str).isin(selected_groups)]
-        else:
-            st.caption("暂无产品系列字段。")
+            else:
+                filtered_data = filtered_data.iloc[0:0]
 
     product_options = (
         sorted(filtered_data[product_col].fillna("Unknown").astype(str).unique().tolist())
         if product_col in filtered_data.columns
         else []
     )
-    selected_products: list[str] = []
     with product_box:
-        if product_options:
-            selected_products = st.multiselect(
-                "产品 / Product",
-                product_options,
-                default=[],
-                key="product_profitability_product_filter",
-                placeholder="全部产品",
-            )
-            if selected_products:
-                filtered_data = filtered_data[filtered_data[product_col].fillna("Unknown").astype(str).isin(selected_products)]
-        else:
-            st.caption("暂无产品字段。")
+        selected_products, _ = _multiselect_filter_panel(
+            "产品 / Product",
+            product_options,
+            "product_profitability_product_filter",
+            "全部产品",
+        )
+        if selected_products:
+            filtered_data = filtered_data[filtered_data[product_col].fillna("Unknown").astype(str).isin(selected_products)]
 
     customer_options = (
         sorted(filtered_data[customer_col].fillna("Unknown").astype(str).unique().tolist())
         if customer_col in filtered_data.columns
         else []
     )
-    selected_customers: list[str] = []
     with customer_box:
-        if customer_options:
-            selected_customers = st.multiselect(
-                "客户 / Customer",
-                customer_options,
-                default=[],
-                key="product_profitability_customer_filter",
-                placeholder="全部客户",
-            )
-            if selected_customers:
-                filtered_data = filtered_data[filtered_data[customer_col].fillna("Unknown").astype(str).isin(selected_customers)]
-        else:
-            st.caption("暂无客户字段。")
+        selected_customers, _ = _multiselect_filter_panel(
+            "客户 / Customer",
+            customer_options,
+            "product_profitability_customer_filter",
+            "全部客户",
+        )
+        if selected_customers:
+            filtered_data = filtered_data[filtered_data[customer_col].fillna("Unknown").astype(str).isin(selected_customers)]
     return filtered_data
 
 

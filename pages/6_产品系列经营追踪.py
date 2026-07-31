@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.auth import require_login
+from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
 from app.product_range_metrics import (
     RANGE_COLUMN,
@@ -46,13 +47,13 @@ def _fmt_signed_money(value) -> str:
 
 def _fmt_percent(value) -> str:
     if value is None or pd.isna(value):
-        return "无基数"
+        return "—"
     return f"{float(value):+.1%}"
 
 
 def _fmt_percent_plain(value) -> str:
     if value is None or pd.isna(value):
-        return "无基数"
+        return "—"
     return percent(float(value))
 
 
@@ -122,7 +123,7 @@ def _completion_style(value: object) -> str:
 
 
 def _yoy_style(value: object) -> str:
-    if pd.isna(value) or value == "无基数":
+    if pd.isna(value) or value in {"无基数", "—"}:
         return "background-color: #f3f4f6; color: #4b5563;"
     text = str(value).replace("%", "").replace("+", "")
     try:
@@ -285,7 +286,9 @@ def _render_total_summary(
     completion_text = "未配置" if completion is None else percent(completion)
     gap_text = _fmt_signed_money(gap)
     yoy_text = _fmt_percent(yoy)
-    prior_full_gap_text = "无基数" if prior_full_gap is None else f"距去年全月 {_fmt_signed_money(prior_full_gap)}"
+    yoy_title = ' title="去年同期销售为0，无法计算同比。"' if yoy is None else ""
+    prior_full_gap_text = "—" if prior_full_gap is None else f"距去年全月 {_fmt_signed_money(prior_full_gap)}"
+    prior_full_title = ' title="去年全月销售为0，无法比较差额。"' if prior_full_gap is None else ""
     prior_full_gap_style = _delta_text_style(prior_full_gap)
 
     st.markdown(
@@ -295,11 +298,11 @@ def _render_total_summary(
             <div class="xf-total-metrics">
                 <div><span>本月销售</span><strong>{_fmt_money(current_sales)}</strong></div>
                 <div><span>去年同期</span><strong>{_fmt_money(previous_sales)}</strong></div>
-                <div><span>去年全月</span><strong>{_fmt_money(prior_full_sales)}</strong><small style="{prior_full_gap_style}">{prior_full_gap_text}</small></div>
+                <div><span>去年全月</span><strong>{_fmt_money(prior_full_sales)}</strong><small{prior_full_title} style="{prior_full_gap_style}">{prior_full_gap_text}</small></div>
                 <div><span>本月目标</span><strong>{target_text}</strong></div>
                 <div><span>目标完成率</span><strong class="xf-total-pill" style="{completion_style}">{completion_text}</strong></div>
                 <div><span>距离目标</span><strong class="xf-total-pill" style="{gap_style}">{gap_text}</strong></div>
-                <div><span>本月同比</span><strong class="xf-total-pill" style="{yoy_style}">{yoy_text}</strong></div>
+                <div><span>本月同比</span><strong{yoy_title} class="xf-total-pill" style="{yoy_style}">{yoy_text}</strong></div>
             </div>
         </div>
         """,
@@ -315,6 +318,38 @@ def _render_total_summary(
 def _range_label_options(df: pd.DataFrame) -> list[str]:
     values = df[RANGE_COLUMN].fillna("未分类").astype(str).drop_duplicates().sort_values().tolist()
     return ["全部"] + values
+
+
+def _comparison_data_for_yoy(source_df: pd.DataFrame, filtered_df: pd.DataFrame) -> pd.DataFrame:
+    basis = filtered_df.attrs.get("date_basis", st.session_state.get("date_basis", "Completed Date"))
+    try:
+        comparison = apply_date_basis(source_df, str(basis))
+    except Exception:
+        return filtered_df
+
+    customer_types = filtered_df.attrs.get("customer_types")
+    if customer_types is not None and "Customer Type" in comparison.columns:
+        comparison = comparison[comparison["Customer Type"].fillna("未分类").astype(str).isin([str(value) for value in customer_types])]
+
+    product_groups = filtered_df.attrs.get("product_groups")
+    if product_groups is not None and RANGE_COLUMN in comparison.columns:
+        comparison = comparison[comparison[RANGE_COLUMN].fillna("未分类").astype(str).isin([str(value) for value in product_groups])]
+
+    date_range = filtered_df.attrs.get("date_range")
+    if not isinstance(date_range, tuple) or len(date_range) != 2:
+        return comparison
+
+    start = pd.to_datetime(date_range[0], errors="coerce")
+    end = pd.to_datetime(date_range[1], errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        return comparison
+
+    dates = pd.to_datetime(comparison["Performance Date"], errors="coerce").dt.normalize()
+    current_mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
+    previous_start = start - pd.DateOffset(years=1)
+    previous_end = end - pd.DateOffset(years=1)
+    previous_mask = dates.between(previous_start.normalize(), previous_end.normalize(), inclusive="both")
+    return comparison.loc[current_mask | previous_mask].copy()
 
 
 @st.cache_data(show_spinner=False)
@@ -438,6 +473,7 @@ if RANGE_COLUMN not in df.columns:
 filtered = show_filters(df, "product_range")
 show_code_warning(filtered)
 show_context_summary(filtered)
+comparison_data = _comparison_data_for_yoy(df, filtered)
 
 dates = pd.to_datetime(filtered["Performance Date"], errors="coerce").dropna()
 if dates.empty:
@@ -452,7 +488,7 @@ selected_year = filter_cols[0].selectbox("年度", years, index=years.index(defa
 selected_month = filter_cols[1].selectbox("月份", list(range(1, 13)), index=default_month - 1, format_func=lambda value: f"{value}月")
 
 amount_targets = st.session_state.get("target_amount_data")
-overview, ctx = _cached_range_overview(filtered, amount_targets, selected_year, selected_month)
+overview, ctx = _cached_range_overview(comparison_data, amount_targets, selected_year, selected_month)
 range_options = _range_label_options(filtered)
 selected_range = filter_cols[2].selectbox("产品系列", range_options)
 
@@ -481,7 +517,7 @@ else:
     if selected_range != "全部":
         table = table[table["产品系列"].eq(selected_range)].copy()
 
-    _render_total_summary(table, filtered, amount_targets, ctx, selected_range)
+    _render_total_summary(table, comparison_data, amount_targets, ctx, selected_range)
 
     section_header("精简系列经营总览表")
     status_options = sorted(table["当前状态"].dropna().unique().tolist())
@@ -515,7 +551,7 @@ else:
     )
 
 section_header("本月周进度", "区分时间进度和目标完成率，用于每周查看系列进展。")
-weekly = _cached_week_progress(filtered, amount_targets, ctx, selected_range)
+weekly = _cached_week_progress(comparison_data, amount_targets, ctx, selected_range)
 if weekly.empty:
     st.info("当前月份暂无周进度数据。")
 else:
@@ -553,7 +589,7 @@ else:
     )
 
 section_header("月度和年度进度", "月度销售额、去年同期和目标线分开呈现，避免双 Y 轴误导。")
-trend = _cached_monthly_trend(filtered, amount_targets, selected_year, selected_range)
+trend = _cached_monthly_trend(comparison_data, amount_targets, selected_year, selected_range)
 left, right = st.columns([1.5, 1])
 with left:
     st.plotly_chart(_bar_line_chart(trend), width="stretch")
@@ -579,12 +615,12 @@ else:
     st.caption("默认不加载单系列贡献拆解，以加快页面切换。")
     detail_range = None
 if load_detail and detail_range:
-    detail_trend = _cached_monthly_trend(filtered, amount_targets, selected_year, detail_range)
+    detail_trend = _cached_monthly_trend(comparison_data, amount_targets, selected_year, detail_range)
     st.plotly_chart(_bar_line_chart(detail_trend), width="stretch")
-    product_dimension = "Product Label" if "Product Label" in filtered.columns else "Product"
-    customer_dimension = "Customer Label" if "Customer Label" in filtered.columns else "Customer"
-    sku_growth, sku_decline = _cached_top_contributors(filtered, product_dimension, ctx, detail_range)
-    customer_growth, customer_decline = _cached_top_contributors(filtered, customer_dimension, ctx, detail_range)
+    product_dimension = "Product Label" if "Product Label" in comparison_data.columns else "Product"
+    customer_dimension = "Customer Label" if "Customer Label" in comparison_data.columns else "Customer"
+    sku_growth, sku_decline = _cached_top_contributors(comparison_data, product_dimension, ctx, detail_range)
+    customer_growth, customer_decline = _cached_top_contributors(comparison_data, customer_dimension, ctx, detail_range)
     col1, col2 = st.columns(2)
     with col1:
         section_header("主要增长贡献", "按本月较去年同期的销售额增量排序。")
