@@ -93,6 +93,46 @@ class AuthCacheResilienceTest(unittest.TestCase):
             parsed = json.load(handle)
         self.assertEqual({"hash": {"user_email": "user@example.com"}}, parsed)
 
+    def test_local_runtime_url_overrides_configured_oauth_redirect(self) -> None:
+        self.assertEqual(
+            "http://127.0.0.1:8501/",
+            auth._select_oauth_redirect_uri(
+                "http://127.0.0.1:8501/%E5%AE%A2%E6%88%B7%E5%88%86%E6%9E%90?code=abc&state=xyz",
+                "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/",
+            ),
+        )
+
+    def test_localhost_runtime_url_overrides_configured_oauth_redirect(self) -> None:
+        self.assertEqual(
+            "http://localhost:8501/",
+            auth._select_oauth_redirect_uri(
+                "http://localhost:8501/",
+                "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/",
+            ),
+        )
+
+    def test_hosted_runtime_uses_configured_oauth_redirect(self) -> None:
+        configured = "https://xf-business-performance-platform-vgvkigshf4suc2cxmtklj9.streamlit.app/"
+        self.assertEqual(
+            configured,
+            auth._select_oauth_redirect_uri(
+                "https://temporary-share-host.streamlit.app/%E5%AE%A2%E6%88%B7%E5%88%86%E6%9E%90?code=abc&state=xyz",
+                configured,
+            ),
+        )
+
+    def test_runtime_redirect_is_used_when_secret_is_missing(self) -> None:
+        self.assertEqual(
+            "https://example.streamlit.app/",
+            auth._select_oauth_redirect_uri("https://example.streamlit.app/?code=abc", ""),
+        )
+
+    def test_missing_oauth_state_is_rejected_with_friendly_error(self) -> None:
+        with self.assertRaises(PermissionError) as context:
+            auth._oauth_context("missing-state")
+
+        self.assertIn("登录会话已过期", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

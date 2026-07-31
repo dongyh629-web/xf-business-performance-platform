@@ -115,6 +115,7 @@ ROLE_PERMISSIONS = {
 ROLE_LOOKUP = {role.casefold(): role for role in ROLE_PERMISSIONS}
 _OAUTH_STATE_CACHE_LOCK = threading.RLock()
 _APP_SESSION_STORE_LOCK = threading.RLock()
+LOCAL_OAUTH_REDIRECT_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 @dataclass(frozen=True)
@@ -197,15 +198,30 @@ def _delete_cookie(name: str) -> None:
         return
 
 
-def _current_url_without_auth_params() -> str:
-    configured = str(_plain_secret_section("google_oauth").get("redirect_uri", "")).strip()
-    if configured:
-        return configured
-    current_url = st.context.url
+def _app_base_url(current_url: str | None) -> str:
     if not current_url:
         return ""
     parsed = urlsplit(current_url)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
+
+
+def _is_local_oauth_redirect(url: str) -> bool:
+    return (urlsplit(url).hostname or "").casefold() in LOCAL_OAUTH_REDIRECT_HOSTS
+
+
+def _select_oauth_redirect_uri(current_url: str | None, configured_redirect_uri: str | None) -> str:
+    runtime_redirect_uri = _app_base_url(current_url)
+    configured = str(configured_redirect_uri or "").strip()
+    if runtime_redirect_uri and _is_local_oauth_redirect(runtime_redirect_uri):
+        return runtime_redirect_uri
+    return configured or runtime_redirect_uri
+
+
+def _current_url_without_auth_params() -> str:
+    configured = str(_plain_secret_section("google_oauth").get("redirect_uri", "")).strip()
+    return _select_oauth_redirect_uri(st.context.url, configured)
 
 
 def _current_navigation_target() -> str:
