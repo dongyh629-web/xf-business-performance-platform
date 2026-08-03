@@ -18,6 +18,45 @@ class _FakeStreamlit:
     def __init__(self) -> None:
         self.session_state: dict = {}
         self.cache_data = _FakeCacheData()
+        self.button_clicks: dict[str, bool] = {}
+        self.button_calls: list[dict[str, object]] = []
+        self.messages: list[tuple[str, str]] = []
+        self.rerun_called = False
+
+    def warning(self, message: str) -> None:
+        self.messages.append(("warning", message))
+
+    def markdown(self, message: str) -> None:
+        self.messages.append(("markdown", message))
+
+    def caption(self, message: str) -> None:
+        self.messages.append(("caption", message))
+
+    def info(self, message: str) -> None:
+        self.messages.append(("info", message))
+
+    def success(self, message: str) -> None:
+        self.messages.append(("success", message))
+
+    def error(self, message: str) -> None:
+        self.messages.append(("error", message))
+
+    def button(self, label: str, **kwargs):
+        self.button_calls.append({"label": label, **kwargs})
+        return bool(self.button_clicks.get(str(kwargs.get("key") or label), False))
+
+    def spinner(self, message: str):
+        self.messages.append(("spinner", message))
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def rerun(self) -> None:
+        self.rerun_called = True
 
 
 def _status(sales_status: str = "loaded") -> DriveLoadStatus:
@@ -174,6 +213,49 @@ class DriveStartupLoadingTests(unittest.TestCase):
         service_factory.assert_not_called()
         self.assertEqual([], registry.entries)
         self.assertEqual([], snapshots)
+
+    def test_load_prompt_does_not_render_when_session_has_data(self) -> None:
+        self.fake_st.session_state["clean_data"] = pd.DataFrame({"Sales Amount": [1.0]})
+
+        rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertFalse(rendered)
+        self.assertEqual([], self.fake_st.button_calls)
+
+    def test_load_prompt_renders_when_no_session_data(self) -> None:
+        rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        self.assertEqual("加载最新 Google Drive 数据", self.fake_st.button_calls[-1]["label"])
+        self.assertFalse(self.fake_st.button_calls[-1]["disabled"])
+
+    def test_load_prompt_disables_button_while_refresh_in_progress(self) -> None:
+        self.fake_st.session_state["drive_refresh_in_progress"] = True
+
+        rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        self.assertTrue(self.fake_st.button_calls[-1]["disabled"])
+
+    def test_load_prompt_click_triggers_single_refresh_and_rerun(self) -> None:
+        self.fake_st.button_clicks["drive_main_load_button"] = True
+        with patch.object(google_drive, "refresh_drive_data_transaction", return_value=(_status("loaded"), "加载完成")) as refresh:
+            rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        refresh.assert_called_once_with()
+        self.assertTrue(self.fake_st.rerun_called)
+        self.assertFalse(self.fake_st.session_state["drive_refresh_in_progress"])
+        self.assertEqual("加载完成", self.fake_st.session_state["drive_refresh_message"])
+
+    def test_load_prompt_failure_releases_refresh_lock(self) -> None:
+        self.fake_st.button_clicks["drive_main_load_button"] = True
+        with patch.object(google_drive, "refresh_drive_data_transaction", side_effect=DriveUserError("network")):
+            rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        self.assertFalse(self.fake_st.session_state["drive_refresh_in_progress"])
+        self.assertIn("Google Drive 数据加载失败", self.fake_st.session_state["drive_refresh_message"])
 
 
 if __name__ == "__main__":

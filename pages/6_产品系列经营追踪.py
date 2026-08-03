@@ -7,7 +7,7 @@ import streamlit as st
 
 from app.auth import require_login
 from app.data import apply_date_basis
-from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
+from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.product_range_metrics import (
     RANGE_COLUMN,
     build_monthly_trend,
@@ -464,7 +464,7 @@ render_data_source_sidebar(show_uploaders=False)
 
 df = st.session_state.get("clean_data")
 if df is None:
-    st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
+    render_drive_data_load_prompt()
     st.stop()
 if RANGE_COLUMN not in df.columns:
     st.info("当前销售数据没有 Product Group 字段，暂无法生成产品系列经营追踪。")

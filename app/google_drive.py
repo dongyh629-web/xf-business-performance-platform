@@ -1768,6 +1768,68 @@ def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
     return refreshed, "；".join(message for message in messages if message)
 
 
+def render_drive_data_load_prompt(
+    title: str = "尚未加载业务数据",
+    message: str | None = None,
+) -> bool:
+    """Render a main-content Drive load prompt when session/cache data is unavailable."""
+    st = _get_streamlit()
+    if st.session_state.get("clean_data") is not None:
+        return False
+
+    st.warning(f"🟡 {title}")
+    st.markdown(
+        message
+        or """
+        当前会话尚未恢复业务数据。Streamlit Cloud 休眠或容器重建后，本地缓存可能暂时不可用。
+
+        请点击下方按钮加载最新 Google Drive 数据。首次加载可能需要约 1 分钟，完成后页面会自动刷新。
+        """
+    )
+    st.caption("Load latest Google Drive data. Please do not click repeatedly while loading.")
+
+    in_progress = bool(st.session_state.get("drive_refresh_in_progress"))
+    if in_progress:
+        st.info("🔄 正在同步数据，请稍候。")
+
+    clicked = st.button(
+        "加载最新 Google Drive 数据",
+        key="drive_main_load_button",
+        use_container_width=True,
+        disabled=in_progress,
+    )
+    if not clicked:
+        if st.session_state.get("drive_refresh_message"):
+            st.caption(st.session_state["drive_refresh_message"])
+        return True
+
+    st.session_state["drive_refresh_in_progress"] = True
+    st.session_state["drive_refresh_message"] = "正在连接 Google Drive..."
+    try:
+        st.markdown(
+            """
+            - 正在连接 Google Drive
+            - 正在读取销售数据
+            - 正在读取目标数据
+            - 正在读取成本数据
+            - 正在准备 Dashboard
+            """
+        )
+        with st.spinner("正在加载 Google Drive 数据，首次同步可能需要约 1 分钟..."):
+            _refreshed, refresh_message = refresh_drive_data_transaction()
+        st.session_state["drive_refresh_message"] = refresh_message or "Google Drive 数据加载完成。"
+        st.success(st.session_state["drive_refresh_message"])
+        st.session_state["drive_refresh_in_progress"] = False
+        st.rerun()
+    except Exception as exc:
+        logger.exception("Main Drive data load prompt failed")
+        st.session_state["drive_refresh_in_progress"] = False
+        st.session_state["drive_refresh_message"] = f"Google Drive 数据加载失败：{exc.__class__.__name__}"
+        st.error("Google Drive 数据加载失败，请稍后重试。已有旧数据不会被清空。")
+        st.caption(st.session_state["drive_refresh_message"])
+    return True
+
+
 def _source_text(source_type: str | None, source_label: str | None) -> str:
     if source_type == "drive":
         return DRIVE_SOURCE_LABEL

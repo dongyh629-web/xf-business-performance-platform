@@ -12,7 +12,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 from app.auth import require_login
 from app.config import DATE_BASIS_LABELS
-from app.google_drive import MANUAL_SOURCE_LABEL, ensure_drive_data_loaded, render_data_source_sidebar
+from app.google_drive import MANUAL_SOURCE_LABEL, ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.target_metrics import (
     MONTH_LABELS,
     parse_xf_target_workbook,
@@ -313,6 +313,9 @@ df = st.session_state.get("clean_data")
 
 section_header("数据状态")
 _show_data_status(df)
+if df is None:
+    render_drive_data_load_prompt()
+    st.stop()
 
 section_header("上传目标表 / Upload Targets Excel")
 uploaded_target = st.file_uploader("上传目标表 / Upload Targets Excel", type=["xlsx"], key="target_excel_upload")

@@ -19,7 +19,7 @@ from app.data_validation import (
     zero_value_outbound_rows,
     zero_value_outbound_summary,
 )
-from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_data_source_sidebar
+from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_drive_data_load_prompt, render_data_source_sidebar
 from app.ui import inject_global_styles, money, percent, section_header
 
 
@@ -165,7 +165,7 @@ render_data_source_sidebar(show_uploaders=False)
 
 sales_df = st.session_state.get("clean_data")
 if sales_df is None:
-    st.info("当前暂无销售数据，请先加载销售数据。")
+    render_drive_data_load_prompt()
     st.stop()
 
 try:

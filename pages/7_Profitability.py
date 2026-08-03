@@ -21,7 +21,7 @@ from app.business_metrics import (
     profitability_kpis,
     suspicious_unit_comparison,
 )
-from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_data_source_sidebar
+from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_drive_data_load_prompt, render_data_source_sidebar
 from app.profitability_table_styles import (
     cost_to_sales_style,
     coverage_cell_style,
@@ -684,7 +684,7 @@ render_data_source_sidebar(show_uploaders=False)
 
 sales_df = st.session_state.get("clean_data")
 if sales_df is None:
-    st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
+    render_drive_data_load_prompt()
     st.stop()
 
 try:

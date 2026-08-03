@@ -12,6 +12,7 @@ from app.data import import_excel, monthly_sales, top_entity_table, top_table
 from app.google_drive import (
     MANUAL_SOURCE_LABEL,
     ensure_drive_data_loaded,
+    render_drive_data_load_prompt,
     render_data_source_sidebar,
     store_sales_import_in_session,
     store_target_workbook_in_session,
@@ -86,16 +87,7 @@ def render_home_page() -> None:
             st.warning(drive_status.sales.message)
             st.info("当前暂无销售数据，可使用左侧手动上传销售明细作为备用。")
         else:
-            st.warning("🟡 尚未同步业务数据")
-            st.markdown(
-                """
-                当前尚未加载业务数据。
-
-                请在左侧 **数据同步** 中点击 **刷新 Google Drive 数据**。
-
-                首次同步需要下载并解析销售、目标和成本文件，可能需要约 1 分钟。
-                """
-            )
+            render_drive_data_load_prompt()
         st.stop()
 
     loaded_at = st.session_state.get("drive_sales_loaded_at") or st.session_state.get("drive_target_loaded_at") or "无"

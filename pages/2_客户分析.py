@@ -10,7 +10,7 @@ from app.business_metrics import aggregate_customer_profitability, get_cached_bu
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
 from app.customer_metrics import abc_distribution, build_customer_summary, concentration_metrics
 from app.data import monthly_sales, top_entity_table, top_table
-from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_data_source_sidebar
+from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_drive_data_load_prompt, render_data_source_sidebar
 from app.ui import bar_chart, date_text, days, donut_chart, inject_global_styles, line_chart, metric_cards, metric_row, money, percent, section_header, show_code_warning, show_context_summary, show_filters
 
 
@@ -191,7 +191,7 @@ render_data_source_sidebar(show_uploaders=False)
 df = st.session_state.get("clean_data")
 
 if df is None:
-    st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
+    render_drive_data_load_prompt()
     st.stop()
 
 try:

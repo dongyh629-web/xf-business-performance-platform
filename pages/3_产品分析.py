@@ -4,7 +4,7 @@ import streamlit as st
 
 from app.auth import require_login
 from app.data import monthly_sales, top_entity_table, top_table
-from app.google_drive import ensure_drive_data_loaded, render_data_source_sidebar
+from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.ui import bar_chart, inject_global_styles, line_chart, money, percent, metric_row, section_header, show_code_warning, show_context_summary, show_filters, style_plotly
 
 
@@ -87,7 +87,7 @@ render_data_source_sidebar(show_uploaders=False)
 df = st.session_state.get("clean_data")
 
 if df is None:
-    st.info("当前暂无销售数据，请回到首页使用 Google Drive 刷新或手动上传 Unleashed 销售明细。")
+    render_drive_data_load_prompt()
     st.stop()
 
 filtered = show_filters(df, "products")
