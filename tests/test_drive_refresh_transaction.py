@@ -43,6 +43,8 @@ class _FakeStreamlit:
 
     def button(self, label: str, **kwargs):
         self.button_calls.append({"label": label, **kwargs})
+        if kwargs.get("disabled"):
+            return False
         return bool(self.button_clicks.get(str(kwargs.get("key") or label), False))
 
     def spinner(self, message: str):
@@ -167,6 +169,17 @@ class DriveRefreshTransactionTests(unittest.TestCase):
         self.assertIn("目标失败", message)
         self.assertEqual(180693.0, float(self.fake_st.session_state["target_data"]["Revised Target"].iloc[0]))
 
+    def test_refresh_transaction_total_timeout_keeps_previous_state(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=lambda force=True: self._cost_success()), patch.object(
+            google_drive, "_raise_if_refresh_deadline_expired", side_effect=DriveUserError("timeout")
+        ):
+            status, message = google_drive.refresh_drive_data_transaction()
+
+        self.assertIsNone(status)
+        self.assertIn("继续使用旧数据", message)
+        self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(100.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
 
 class DriveStartupLoadingTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -231,11 +244,34 @@ class DriveStartupLoadingTests(unittest.TestCase):
 
     def test_load_prompt_disables_button_while_refresh_in_progress(self) -> None:
         self.fake_st.session_state["drive_refresh_in_progress"] = True
+        self.fake_st.session_state["drive_refresh_started_at"] = google_drive.time.time()
 
         rendered = google_drive.render_drive_data_load_prompt()
 
         self.assertTrue(rendered)
         self.assertTrue(self.fake_st.button_calls[-1]["disabled"])
+
+    def test_load_prompt_clears_stale_refresh_lock(self) -> None:
+        self.fake_st.session_state["drive_refresh_in_progress"] = True
+        self.fake_st.session_state["drive_refresh_started_at"] = google_drive.time.time() - (
+            google_drive.REFRESH_STALE_LOCK_SECONDS + 5
+        )
+
+        rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        self.assertFalse(self.fake_st.session_state["drive_refresh_in_progress"])
+        self.assertFalse(self.fake_st.button_calls[-1]["disabled"])
+
+    def test_repeated_click_does_not_start_second_refresh_when_locked(self) -> None:
+        self.fake_st.session_state["drive_refresh_in_progress"] = True
+        self.fake_st.session_state["drive_refresh_started_at"] = google_drive.time.time()
+        self.fake_st.button_clicks["drive_main_load_button"] = True
+        with patch.object(google_drive, "refresh_drive_data_transaction") as refresh:
+            rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        refresh.assert_not_called()
 
     def test_load_prompt_click_triggers_single_refresh_and_rerun(self) -> None:
         self.fake_st.button_clicks["drive_main_load_button"] = True
@@ -251,6 +287,15 @@ class DriveStartupLoadingTests(unittest.TestCase):
     def test_load_prompt_failure_releases_refresh_lock(self) -> None:
         self.fake_st.button_clicks["drive_main_load_button"] = True
         with patch.object(google_drive, "refresh_drive_data_transaction", side_effect=DriveUserError("network")):
+            rendered = google_drive.render_drive_data_load_prompt()
+
+        self.assertTrue(rendered)
+        self.assertFalse(self.fake_st.session_state["drive_refresh_in_progress"])
+        self.assertIn("Google Drive 数据加载失败", self.fake_st.session_state["drive_refresh_message"])
+
+    def test_load_prompt_timeout_releases_refresh_lock(self) -> None:
+        self.fake_st.button_clicks["drive_main_load_button"] = True
+        with patch.object(google_drive, "refresh_drive_data_transaction", side_effect=DriveUserError("Google Drive 数据加载超时")):
             rendered = google_drive.render_drive_data_load_prompt()
 
         self.assertTrue(rendered)

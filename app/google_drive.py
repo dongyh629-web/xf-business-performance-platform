@@ -68,6 +68,8 @@ SALES_REFRESH_CORE_KEYS = {
 }
 REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_snapshot", "drive_target_", "target_")
 SUCCESSFUL_REFRESH_STATUSES = {"loaded", "cached", "unchanged"}
+REFRESH_TRANSACTION_TIMEOUT_SECONDS = 180
+REFRESH_STALE_LOCK_SECONDS = 120
 
 
 class DriveUserError(RuntimeError):
@@ -185,7 +187,22 @@ def _perf_log(step: str, start: float, rows: int | None = None, cache: str | Non
     if cache:
         details.append("cache=%s")
         args.append(cache)
-    logger.info(" ".join(details), *args)
+        logger.info(" ".join(details), *args)
+
+
+def _elapsed_seconds(start: float) -> float:
+    return time.perf_counter() - start
+
+
+def _raise_if_refresh_deadline_expired(start: float, stage: str, timeout_seconds: int = REFRESH_TRANSACTION_TIMEOUT_SECONDS) -> None:
+    elapsed = _elapsed_seconds(start)
+    if elapsed > timeout_seconds:
+        logger.warning(
+            "refresh_transaction_failed stage=%s elapsed_seconds=%.3f error_type=Timeout",
+            stage,
+            elapsed,
+        )
+        raise DriveUserError("Google Drive 数据加载超时，请稍后重试。")
 
 
 def _ensure_cache_dir() -> None:
@@ -503,7 +520,13 @@ def get_drive_service(config: DriveConfig):
             scopes=[DRIVE_SCOPE],
         )
         with stage_timer("google_drive_initialization") as done:
+            credentials_start = _timer()
+            logger.info("credentials_refresh_started")
             with_google_transport_retry("drive_credentials_refresh", lambda: credentials.refresh(google_auth_request(timeout=20)))
+            logger.info(
+                "credentials_refresh_completed elapsed_seconds=%.3f",
+                _elapsed_seconds(credentials_start),
+            )
             client = DriveRestClient(AuthorizedSession(credentials))
             done()
             return client
@@ -1316,16 +1339,21 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
     for candidate in candidates:
         metadata = candidate.metadata
         try:
+            candidate_start = _timer()
             logger.info(
-                "Google Drive sales attempting file name=%s file_id=%s modifiedTime=%s filename_date=%s",
+                "Google Drive sales attempting file name=%s modifiedTime=%s filename_date=%s",
                 metadata.name,
-                _safe_file_id(metadata.file_id),
                 metadata.modified_time,
                 _date_text(candidate.filename_date),
             )
+            logger.info("sales_download_started file_name=%s", metadata.name)
             content = download_drive_file(service, metadata.file_id).getvalue()
+            logger.info("sales_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", metadata.name, _elapsed_seconds(candidate_start), len(content))
+            parse_start = _timer()
+            logger.info("sales_parse_started file_name=%s", metadata.name)
             result = import_excel(_NamedBytesIO(content, metadata.name))
             _validate_sales_result(result)
+            logger.info("sales_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", metadata.name, _elapsed_seconds(parse_start), len(result.clean))
         except ValueError as exc:
             failures.append(f"{metadata.name}: {exc}")
             logger.warning("Google Drive sales candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
@@ -1472,9 +1500,15 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
     for candidate in candidates:
         metadata = candidate.metadata
         try:
+            candidate_start = _timer()
+            logger.info("targets_load_started file_name=%s", metadata.name)
             content = download_drive_file(service, metadata.file_id).getvalue()
+            logger.info("targets_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", metadata.name, _elapsed_seconds(candidate_start), len(content))
+            parse_start = _timer()
+            logger.info("targets_parse_started file_name=%s", metadata.name)
             parsed = parse_xf_target_workbook(_NamedBytesIO(content, metadata.name))
             _validate_target_workbook(parsed)
+            logger.info("targets_parse_completed file_name=%s elapsed_seconds=%.3f", metadata.name, _elapsed_seconds(parse_start))
         except ValueError as exc:
             failures.append(f"{metadata.name}: {exc}")
             logger.warning("Google Drive target candidate rejected file_name=%s reason=%s", metadata.name, exc.__class__.__name__)
@@ -1643,8 +1677,14 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
                 if not entry.participates_in_matching:
                     continue
                 try:
+                    snapshot_start = _timer()
+                    logger.info("cost_download_started file_name=%s", entry.file_name)
                     content = download_drive_file(service, str(entry.file_id)).getvalue()
+                    logger.info("cost_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", entry.file_name, _elapsed_seconds(snapshot_start), len(content))
+                    parse_start = _timer()
+                    logger.info("cost_parse_started file_name=%s", entry.file_name)
                     snapshot = load_cost_snapshot_from_bytes(content, entry)
+                    logger.info("cost_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", entry.file_name, _elapsed_seconds(parse_start), len(snapshot.data))
                 except Exception as exc:
                     entry.validation_status = "Invalid"
                     entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
@@ -1740,23 +1780,61 @@ def _successful_cost_refresh(snapshots: list[CostSnapshot]) -> bool:
 
 
 def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
+    refresh_start = _timer()
+    logger.info("refresh_transaction_started")
     previous_state = _snapshot_refresh_state()
     clear_drive_state()
     try:
+        logger.info("cost_load_started")
         _registry, cost_snapshots = load_drive_cost_snapshots(force=True)
+        logger.info("cost_load_completed elapsed_seconds=%.3f rows=%s", _elapsed_seconds(refresh_start), len(cost_snapshots))
     except DriveUserError as exc:
         _restore_refresh_state(previous_state)
+        logger.warning(
+            "refresh_transaction_failed stage=cost_load elapsed_seconds=%.3f error_type=%s",
+            _elapsed_seconds(refresh_start),
+            exc.__class__.__name__,
+        )
         return None, f"成本快照刷新失败，当前继续使用旧数据。失败原因：{exc}"
 
+    try:
+        _raise_if_refresh_deadline_expired(refresh_start, "cost_load")
+    except DriveUserError as exc:
+        _restore_refresh_state(previous_state)
+        return None, f"Google Drive 数据加载超时，当前继续使用旧数据。失败原因：{exc}"
     if not _successful_cost_refresh(cost_snapshots):
         cost_message = str(_get_streamlit().session_state.get("drive_cost_message") or "未找到有效成本快照。")
         _restore_refresh_state(previous_state)
+        logger.warning(
+            "refresh_transaction_failed stage=cost_validation elapsed_seconds=%.3f error_type=CostRefreshIncomplete",
+            _elapsed_seconds(refresh_start),
+        )
         return None, f"成本快照刷新未完成，当前继续使用旧数据。{cost_message}"
 
+    logger.info("drive_file_discovery_started")
+    logger.info("sales_load_started")
     refreshed = load_drive_business_files(force=True)
+    logger.info("drive_file_discovery_completed elapsed_seconds=%.3f", _elapsed_seconds(refresh_start))
+    clean = _get_streamlit().session_state.get("clean_data")
+    logger.info(
+        "sales_load_completed elapsed_seconds=%.3f rows=%s status=%s",
+        _elapsed_seconds(refresh_start),
+        len(clean) if clean is not None else None,
+        refreshed.sales.status,
+    )
+    logger.info("targets_load_completed elapsed_seconds=%.3f status=%s", _elapsed_seconds(refresh_start), refreshed.targets.status)
+    try:
+        _raise_if_refresh_deadline_expired(refresh_start, "business_files_load")
+    except DriveUserError as exc:
+        _restore_refresh_state(previous_state)
+        return refreshed, f"Google Drive 数据加载超时，当前继续使用旧数据。失败原因：{exc}"
     if not _successful_item_status(refreshed.sales):
         sales_message = refreshed.sales.message or "销售数据刷新失败。"
         _restore_refresh_state(previous_state)
+        logger.warning(
+            "refresh_transaction_failed stage=sales_load elapsed_seconds=%.3f error_type=SalesRefreshIncomplete",
+            _elapsed_seconds(refresh_start),
+        )
         return refreshed, f"销售数据刷新失败，当前继续使用旧数据。失败原因：{sales_message}"
 
     messages = [refreshed.sales.message]
@@ -1765,6 +1843,7 @@ def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
         messages.append(cost_status.message)
     if refreshed.targets.message:
         messages.append(refreshed.targets.message)
+    logger.info("refresh_transaction_completed elapsed_seconds=%.3f", _elapsed_seconds(refresh_start))
     return refreshed, "；".join(message for message in messages if message)
 
 
@@ -1775,7 +1854,21 @@ def render_drive_data_load_prompt(
     """Render a main-content Drive load prompt when session/cache data is unavailable."""
     st = _get_streamlit()
     if st.session_state.get("clean_data") is not None:
+        st.session_state.pop("drive_refresh_in_progress", None)
+        st.session_state.pop("drive_refresh_started_at", None)
         return False
+
+    started_at = st.session_state.get("drive_refresh_started_at")
+    if st.session_state.get("drive_refresh_in_progress") and started_at:
+        try:
+            lock_age = time.time() - float(started_at)
+        except (TypeError, ValueError):
+            lock_age = REFRESH_STALE_LOCK_SECONDS + 1
+        if lock_age > REFRESH_STALE_LOCK_SECONDS:
+            logger.warning("drive_refresh_stale_lock_cleared elapsed_seconds=%.3f", lock_age)
+            st.session_state["drive_refresh_in_progress"] = False
+            st.session_state.pop("drive_refresh_started_at", None)
+            st.session_state["drive_refresh_message"] = "上一次同步未完成，已恢复按钮，可重新尝试。"
 
     st.warning(f"🟡 {title}")
     st.markdown(
@@ -1790,7 +1883,7 @@ def render_drive_data_load_prompt(
 
     in_progress = bool(st.session_state.get("drive_refresh_in_progress"))
     if in_progress:
-        st.info("🔄 正在同步数据，请稍候。")
+        st.info("🔄 正在加载 Google Drive 数据，请稍候。")
 
     clicked = st.button(
         "加载最新 Google Drive 数据",
@@ -1804,29 +1897,22 @@ def render_drive_data_load_prompt(
         return True
 
     st.session_state["drive_refresh_in_progress"] = True
+    st.session_state["drive_refresh_started_at"] = time.time()
     st.session_state["drive_refresh_message"] = "正在连接 Google Drive..."
     try:
-        st.markdown(
-            """
-            - 正在连接 Google Drive
-            - 正在读取销售数据
-            - 正在读取目标数据
-            - 正在读取成本数据
-            - 正在准备 Dashboard
-            """
-        )
-        with st.spinner("正在加载 Google Drive 数据，首次同步可能需要约 1 分钟..."):
+        with st.spinner("正在加载 Google Drive 数据，通常需要约 1 分钟。请保持页面打开，不要连续点击。"):
             _refreshed, refresh_message = refresh_drive_data_transaction()
         st.session_state["drive_refresh_message"] = refresh_message or "Google Drive 数据加载完成。"
         st.success(st.session_state["drive_refresh_message"])
-        st.session_state["drive_refresh_in_progress"] = False
         st.rerun()
     except Exception as exc:
         logger.exception("Main Drive data load prompt failed")
-        st.session_state["drive_refresh_in_progress"] = False
         st.session_state["drive_refresh_message"] = f"Google Drive 数据加载失败：{exc.__class__.__name__}"
         st.error("Google Drive 数据加载失败，请稍后重试。已有旧数据不会被清空。")
         st.caption(st.session_state["drive_refresh_message"])
+    finally:
+        st.session_state["drive_refresh_in_progress"] = False
+        st.session_state.pop("drive_refresh_started_at", None)
     return True
 
 
