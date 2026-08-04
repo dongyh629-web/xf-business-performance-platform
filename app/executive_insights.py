@@ -14,8 +14,6 @@ from app.product_range_metrics import RANGE_COLUMN, safe_ratio
 from app.ui import section_header
 
 
-MONTHLY_SUMMARY_WINDOW_DAYS = 7
-POST_MONTH_SUMMARY_DAYS = 7
 UPCOMING_MONTH_WINDOW_DAYS = 7
 
 
@@ -55,10 +53,11 @@ class MonthlyBusinessSummary:
 
 @dataclass(frozen=True)
 class UpcomingMonthTargetSummary:
+    mode: str
     month_start: pd.Timestamp
     month_end: pd.Timestamp
     target: float | None
-    current_month_target: float | None
+    comparison_target: float | None
     change_amount: float | None
     change_percent: float | None
     calendar_week_count: int
@@ -251,26 +250,13 @@ def monthly_summary_context(anchor_date: date | pd.Timestamp) -> MonthlySummaryC
     anchor = pd.Timestamp(anchor_date).normalize()
     current_start = _month_start(anchor)
     current_end = _month_end(anchor)
-    if int(anchor.day) <= POST_MONTH_SUMMARY_DAYS:
-        period_start = _previous_month(anchor)
-        period_end = _month_end(period_start)
-        return MonthlySummaryContext(
-            period_start=period_start,
-            period_end=period_end,
-            data_cutoff=period_end,
-            is_previous_month_summary=True,
-            is_partial_month=False,
-            expanded_by_default=True,
-        )
-    days_to_month_end = int((current_end - anchor).days)
-    expanded = days_to_month_end < MONTHLY_SUMMARY_WINDOW_DAYS
     return MonthlySummaryContext(
         period_start=current_start,
         period_end=current_end,
         data_cutoff=anchor,
         is_previous_month_summary=False,
         is_partial_month=anchor < current_end,
-        expanded_by_default=expanded,
+        expanded_by_default=True,
     )
 
 
@@ -417,39 +403,49 @@ def build_upcoming_month_target_summary(
     if work.empty:
         return None
     anchor = pd.Timestamp(anchor_date).normalize() if anchor_date is not None else work["_summary_date"].max()
-    if not should_show_upcoming_month(anchor):
-        return None
-    next_start = _month_start(anchor) + pd.DateOffset(months=1)
-    next_end = _month_end(next_start)
-    current_target = _target_value(targets, int(anchor.year), int(anchor.month))
-    next_target = _target_value(targets, int(next_start.year), int(next_start.month))
-    week_count = _calendar_week_count(next_start, next_end)
-    business_day_count = england_wales_business_days(next_start, next_end)
+    current_start = _month_start(anchor)
+    if should_show_upcoming_month(anchor):
+        mode = "upcoming"
+        target_start = current_start + pd.DateOffset(months=1)
+        comparison_start = current_start
+        low_completion_start = current_start
+    else:
+        mode = "current"
+        target_start = current_start
+        comparison_start = current_start - pd.DateOffset(months=1)
+        low_completion_start = current_start
+    target_end = _month_end(target_start)
+    comparison_target = _target_value(targets, int(comparison_start.year), int(comparison_start.month))
+    target = _target_value(targets, int(target_start.year), int(target_start.month))
+    week_count = _calendar_week_count(target_start, target_end)
+    business_day_count = england_wales_business_days(target_start, target_end)
 
-    top_product_groups = _product_group_targets(amount_targets, int(next_start.year), int(next_start.month)).sort_values(
+    top_product_groups = _product_group_targets(amount_targets, int(target_start.year), int(target_start.month)).sort_values(
         "Target", ascending=False
     )
-    current_group_targets = _product_group_targets(amount_targets, int(anchor.year), int(anchor.month))
-    highest_increase_groups = _target_increases(top_product_groups, current_group_targets)
-    low_completion_groups = _low_completion_groups(work, current_group_targets, anchor)
+    comparison_group_targets = _product_group_targets(amount_targets, int(comparison_start.year), int(comparison_start.month))
+    low_completion_group_targets = _product_group_targets(amount_targets, int(low_completion_start.year), int(low_completion_start.month))
+    highest_increase_groups = _target_increases(top_product_groups, comparison_group_targets)
+    low_completion_groups = _low_completion_groups(work, low_completion_group_targets, anchor)
 
     return UpcomingMonthTargetSummary(
-        month_start=next_start,
-        month_end=next_end,
-        target=next_target,
-        current_month_target=current_target,
-        change_amount=(next_target - current_target) if next_target is not None and current_target is not None else None,
-        change_percent=safe_ratio((next_target or 0.0) - (current_target or 0.0), current_target or 0.0)
-        if next_target is not None and current_target is not None
+        mode=mode,
+        month_start=target_start,
+        month_end=target_end,
+        target=target,
+        comparison_target=comparison_target,
+        change_amount=(target - comparison_target) if target is not None and comparison_target is not None else None,
+        change_percent=safe_ratio((target or 0.0) - (comparison_target or 0.0), comparison_target or 0.0)
+        if target is not None and comparison_target is not None
         else None,
         calendar_week_count=week_count,
         business_day_count=business_day_count,
-        weekly_target=safe_ratio(next_target or 0.0, float(week_count)) if next_target is not None else None,
-        business_day_target=safe_ratio(next_target or 0.0, float(business_day_count)) if next_target is not None else None,
+        weekly_target=safe_ratio(target or 0.0, float(week_count)) if target is not None else None,
+        business_day_target=safe_ratio(target or 0.0, float(business_day_count)) if target is not None else None,
         top_product_groups=top_product_groups.head(5).reset_index(drop=True),
         highest_increase_groups=highest_increase_groups,
         low_completion_groups=low_completion_groups,
-        missing_target=next_target is None,
+        missing_target=target is None,
     )
 
 
@@ -486,10 +482,10 @@ def render_monthly_business_summary(summary: MonthlyBusinessSummary | None) -> N
     title = "月度经营摘要"
     subtitle = "Monthly Business Summary"
     label = _summary_period_label(summary.context)
-    with st.expander(f"{title} / {subtitle} · {label}", expanded=summary.context.expanded_by_default):
-        if summary.context.is_partial_month:
-            st.caption(f"截至 {summary.context.data_cutoff.date()} 的部分月份数据")
-        st.markdown(_monthly_summary_html(summary), unsafe_allow_html=True)
+    section_header(f"{title} · {label}", subtitle)
+    if summary.context.is_partial_month:
+        st.caption(f"截至 {summary.context.data_cutoff.date()} 的部分月份数据")
+    st.markdown(_monthly_summary_html(summary), unsafe_allow_html=True)
 
 
 def _summary_period_label(context: MonthlySummaryContext) -> str:
@@ -533,15 +529,26 @@ def render_upcoming_month_target_card(summary: UpcomingMonthTargetSummary | None
     if summary is None:
         return
     month_name = f"{summary.month_start.month} 月"
-    section_header(f"即将到来的 {month_name}", f"Upcoming {summary.month_start.strftime('%B')}")
-    target_text = "尚未设置下月目标" if summary.missing_target else _money(summary.target)
+    if summary.mode == "upcoming":
+        section_header(f"即将到来的 {month_name}", f"Upcoming {summary.month_start.strftime('%B')}")
+        target_label = "下月销售总目标"
+        change_label = "较本月变化"
+        missing_text = "尚未设置下月目标"
+        expander_label = "查看下月产品系列目标 Top 5"
+    else:
+        section_header("本月经营目标", "Current Month Target")
+        target_label = "本月销售总目标"
+        change_label = "较上月目标变化"
+        missing_text = "尚未设置本月目标"
+        expander_label = "查看本月产品系列目标 Top 5"
+    target_text = missing_text if summary.missing_target else _money(summary.target)
     change_text = "N/A" if summary.change_amount is None else f"{_signed_money(summary.change_amount)} / {_signed_percent(summary.change_percent)}"
     st.markdown(
         f"""
         <div class="xf-insight-card">
             <div class="xf-insight-kpis">
-                <div><span>下月销售总目标</span><strong>{escape(target_text)}</strong></div>
-                <div><span>较本月变化</span><strong>{escape(change_text)}</strong></div>
+                <div><span>{escape(target_label)}</span><strong>{escape(target_text)}</strong></div>
+                <div><span>{escape(change_label)}</span><strong>{escape(change_text)}</strong></div>
                 <div><span>周均目标</span><strong>{escape(_money(summary.weekly_target))}</strong></div>
                 <div><span>工作日日均目标</span><strong>{escape(_money(summary.business_day_target))}</strong></div>
             </div>
@@ -556,7 +563,7 @@ def render_upcoming_month_target_card(summary: UpcomingMonthTargetSummary | None
         unsafe_allow_html=True,
     )
     if not summary.top_product_groups.empty:
-        with st.expander("查看下月产品系列目标 Top 5", expanded=False):
+        with st.expander(expander_label, expanded=False):
             display = summary.top_product_groups.rename(columns={RANGE_COLUMN: "产品系列", "Target": "目标"})
             st.dataframe(
                 display,

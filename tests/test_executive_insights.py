@@ -64,10 +64,11 @@ def _amount_targets_fixture() -> pd.DataFrame:
 
 
 class ExecutiveInsightsTests(unittest.TestCase):
-    def test_monthly_summary_collapsed_before_month_end_window(self) -> None:
+    def test_monthly_summary_always_expanded_for_current_month(self) -> None:
         context = monthly_summary_context(pd.Timestamp("2026-07-20"))
         self.assertEqual(pd.Timestamp("2026-07-01"), context.period_start)
-        self.assertFalse(context.expanded_by_default)
+        self.assertTrue(context.expanded_by_default)
+        self.assertFalse(context.is_previous_month_summary)
         self.assertFalse(should_show_upcoming_month(pd.Timestamp("2026-07-20")))
 
     def test_monthly_summary_expands_and_upcoming_shows_on_july_25(self) -> None:
@@ -76,11 +77,11 @@ class ExecutiveInsightsTests(unittest.TestCase):
         self.assertTrue(context.expanded_by_default)
         self.assertTrue(should_show_upcoming_month(pd.Timestamp("2026-07-25")))
 
-    def test_august_first_keeps_previous_month_summary_and_hides_august_preview(self) -> None:
+    def test_august_first_switches_to_current_month_summary_and_target(self) -> None:
         context = monthly_summary_context(pd.Timestamp("2026-08-01"))
-        self.assertEqual(pd.Timestamp("2026-07-01"), context.period_start)
-        self.assertEqual(pd.Timestamp("2026-07-31"), context.period_end)
-        self.assertTrue(context.is_previous_month_summary)
+        self.assertEqual(pd.Timestamp("2026-08-01"), context.period_start)
+        self.assertEqual(pd.Timestamp("2026-08-31"), context.period_end)
+        self.assertFalse(context.is_previous_month_summary)
         self.assertTrue(context.expanded_by_default)
         self.assertFalse(should_show_upcoming_month(pd.Timestamp("2026-08-01")))
 
@@ -115,8 +116,9 @@ class ExecutiveInsightsTests(unittest.TestCase):
         self.assertIsNotNone(summary)
         assert summary is not None
         self.assertEqual(pd.Timestamp("2026-08-01"), summary.month_start)
+        self.assertEqual("upcoming", summary.mode)
         self.assertEqual(15000.0, summary.target)
-        self.assertEqual(12000.0, summary.current_month_target)
+        self.assertEqual(12000.0, summary.comparison_target)
         self.assertEqual(3000.0, summary.change_amount)
         self.assertFalse(summary.missing_target)
         self.assertEqual(6, summary.calendar_week_count)
@@ -137,6 +139,21 @@ class ExecutiveInsightsTests(unittest.TestCase):
         assert summary is not None
         self.assertIsNone(summary.target)
         self.assertTrue(summary.missing_target)
+
+    def test_target_card_shows_current_month_outside_upcoming_window(self) -> None:
+        summary = build_upcoming_month_target_summary(
+            _sales_fixture(),
+            _targets_fixture(),
+            _amount_targets_fixture(),
+            anchor_date=pd.Timestamp("2026-07-20"),
+        )
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertEqual("current", summary.mode)
+        self.assertEqual(pd.Timestamp("2026-07-01"), summary.month_start)
+        self.assertEqual(12000.0, summary.target)
+        self.assertEqual(10000.0, summary.comparison_target)
+        self.assertEqual(2000.0, summary.change_amount)
 
     def test_august_2026_workdays_exclude_summer_bank_holiday(self) -> None:
         holidays = england_wales_bank_holidays(2026)
