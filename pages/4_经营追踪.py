@@ -12,6 +12,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 from app.auth import require_login
 from app.config import DATE_BASIS_LABELS
+from app.data import apply_date_basis
 from app.google_drive import MANUAL_SOURCE_LABEL, ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.target_metrics import (
     MONTH_LABELS,
@@ -179,6 +180,26 @@ def _show_data_status(sales_df: pd.DataFrame | None) -> None:
             st.caption(f"Drive 最后修改时间：{st.session_state.get('target_drive_modified_time', '无')}")
             st.caption(f"已识别年份：{_target_years_text(target_df)}")
             st.caption(f"已识别工作表：{st.session_state.get('target_structure_label', '网页手动建立目标')}")
+
+
+def _tracking_comparison_sales(df: pd.DataFrame, filtered: pd.DataFrame, target_year: int) -> pd.DataFrame:
+    """Build a comparison frame with the same non-date filters for YoY tracking."""
+    basis = filtered.attrs.get("date_basis", st.session_state.get("date_basis", "Completed Date"))
+    comparison_df = apply_date_basis(df, basis)
+    dates = pd.to_datetime(comparison_df["Performance Date"], errors="coerce")
+    mask = dates.dt.year.isin([target_year, target_year - 1])
+
+    customer_types = filtered.attrs.get("customer_types")
+    if customer_types is not None and "Customer Type" in comparison_df.columns:
+        customer_values = comparison_df["Customer Type"].fillna("未分类").astype(str)
+        mask &= customer_values.isin([str(value) for value in customer_types])
+
+    product_groups = filtered.attrs.get("product_groups")
+    if product_groups is not None and "Product Group" in comparison_df.columns:
+        product_values = comparison_df["Product Group"].fillna("未分类").astype(str)
+        mask &= product_values.isin([str(value) for value in product_groups])
+
+    return comparison_df.loc[mask].copy()
 
 
 def _display_money_table(df: pd.DataFrame, money_columns: list[str], percent_columns: list[str]) -> pd.DataFrame:
@@ -458,7 +479,8 @@ target_df = st.session_state.get("target_data")
 if target_df is None:
     st.stop()
 
-monthly_table, summary = build_monthly_tracking_table(filtered, target_df, target_year)
+comparison_sales = _tracking_comparison_sales(df, filtered, target_year)
+monthly_table, summary = build_monthly_tracking_table(filtered, target_df, target_year, comparison_sales)
 
 annual_target_from_file = st.session_state.get("target_annual_targets", {}).get(target_year)
 if annual_target_from_file is not None:
@@ -502,7 +524,7 @@ st.dataframe(
 )
 
 amount_targets = st.session_state.get("target_amount_data")
-amount_table = build_product_group_amount_tracking(filtered, amount_targets, target_year) if amount_targets is not None else pd.DataFrame()
+amount_table = build_product_group_amount_tracking(filtered, amount_targets, target_year, comparison_sales) if amount_targets is not None else pd.DataFrame()
 if not amount_table.empty:
     section_header("系列金额追踪")
     amount_display = _display_money_table(

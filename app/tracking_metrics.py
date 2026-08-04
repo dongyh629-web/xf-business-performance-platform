@@ -87,8 +87,6 @@ def _month_actual(df: pd.DataFrame, target_year: int, month: int, anchor: pd.Tim
 
 
 def _previous_year_month_sales(df: pd.DataFrame, target_year: int, month: int, anchor: pd.Timestamp) -> float | None:
-    if target_year > anchor.year or (target_year == anchor.year and month > anchor.month):
-        return None
     start, end = _month_bounds(target_year - 1, month)
     if target_year == anchor.year and month == anchor.month:
         comparable_day = min(anchor.day, int((start + pd.offsets.MonthEnd(0)).day))
@@ -127,18 +125,20 @@ def build_monthly_tracking_table(
     sales_df: pd.DataFrame,
     targets: pd.DataFrame,
     target_year: int,
+    comparison_sales_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, TrackingSummary]:
     anchor = analysis_date(sales_df)
     if anchor is None:
         raise ValueError("当前销售数据没有有效 Performance Date，无法生成经营追踪。")
 
+    comparison_df = sales_df if comparison_sales_df is None else comparison_sales_df
     target_table = _complete_targets_for_year(targets, target_year)
     rows = []
     for _, target_row in target_table.iterrows():
         month = int(target_row["Month"])
         revised_target = float(target_row["调整后目标"])
         actual = _month_actual(sales_df, target_year, month, anchor)
-        previous = _previous_year_month_sales(sales_df, target_year, month, anchor)
+        previous = _previous_year_month_sales(comparison_df, target_year, month, anchor)
         gap = actual - revised_target
         status = _month_status(target_year, month, anchor, actual, revised_target)
         rows.append(
@@ -165,7 +165,7 @@ def build_monthly_tracking_table(
 
     annual_target = float(table["调整后目标"].sum())
     annual_actual = float(table["实际销售"].sum())
-    previous_year_actual = _annual_comparable_sales(sales_df, target_year, anchor)
+    previous_year_actual = _annual_comparable_sales(comparison_df, target_year, anchor)
     annual_shortfall = max(annual_target - annual_actual, 0.0)
     ended_shortfall = float(table.loc[table["状态"].isin(["未达成", "接近目标"]), "目标缺口"].sum())
     future_month_count = int(table["状态"].eq("尚未开始").sum())
@@ -191,6 +191,7 @@ def build_product_group_amount_tracking(
     sales_df: pd.DataFrame,
     amount_targets: pd.DataFrame,
     target_year: int,
+    comparison_sales_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     anchor = analysis_date(sales_df)
     if anchor is None or amount_targets is None or amount_targets.empty:
@@ -205,13 +206,15 @@ def build_product_group_amount_tracking(
     if target_rows.empty:
         return pd.DataFrame()
 
+    comparison_df = sales_df if comparison_sales_df is None else comparison_sales_df
     rows = []
     for _, target_row in target_rows.iterrows():
         product_group = str(target_row["Product Group"])
         month = int(target_row["Month"])
         product_sales = sales_df[sales_df["Product Group"].astype(str).eq(product_group)]
+        comparison_product_sales = comparison_df[comparison_df["Product Group"].astype(str).eq(product_group)]
         actual = _month_actual(product_sales, target_year, month, anchor)
-        previous = _previous_year_month_sales(product_sales, target_year, month, anchor)
+        previous = _previous_year_month_sales(comparison_product_sales, target_year, month, anchor)
         original = _safe_float(target_row.get("Original Target", 0.0))
         revised = _safe_float(target_row.get("Revised Target", original), original)
         rows.append(
