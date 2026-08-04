@@ -10,6 +10,13 @@ import streamlit as st
 from app.config import DATE_BASIS_LABELS
 from app.customer_health import active_customer_metrics
 from app.date_periods import WeekContext, week_context
+from app.executive_insights import (
+    build_monthly_summary,
+    build_upcoming_month_target_summary,
+    render_monthly_business_summary,
+    render_upcoming_month_target_card,
+)
+from app.google_drive import load_drive_cost_snapshots
 from app.product_range_metrics import RANGE_COLUMN, build_range_overview, safe_ratio
 from app.ui import safe_page_link, section_header
 
@@ -760,4 +767,14 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
     )
 
     _render_weekly_summary(df, metrics)
+    target_amounts = st.session_state.get("target_amount_data")
+    cost_snapshots = []
+    try:
+        _registry, cost_snapshots = load_drive_cost_snapshots(force=False)
+    except Exception:
+        cost_snapshots = []
+    monthly_summary = build_monthly_summary(df, st.session_state.get("target_data"), cost_snapshots, metrics.anchor_date)
+    render_monthly_business_summary(monthly_summary)
+    upcoming_summary = build_upcoming_month_target_summary(df, st.session_state.get("target_data"), target_amounts, metrics.anchor_date)
+    render_upcoming_month_target_card(upcoming_summary)
     safe_page_link("pages/6_产品系列经营追踪.py", label="查看产品系列")

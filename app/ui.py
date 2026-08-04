@@ -695,6 +695,49 @@ def inject_global_styles() -> None:
             line-height: 1.12;
             overflow-wrap: anywhere;
         }
+        .xf-insight-card {
+            padding: 15px 16px 14px 16px;
+            border: 1px solid var(--xf-border);
+            border-radius: var(--xf-radius-md);
+            background: var(--xf-bg-card);
+            box-shadow: var(--xf-shadow-card);
+            margin: var(--xf-space-3) 0 var(--xf-space-4) 0;
+        }
+        .xf-insight-kpis {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: var(--xf-space-3);
+            margin-bottom: var(--xf-space-3);
+        }
+        .xf-insight-kpis div {
+            min-width: 0;
+            padding: 10px 11px;
+            border: 1px solid var(--xf-border);
+            border-radius: var(--xf-radius-sm);
+            background: #f8fafc;
+        }
+        .xf-insight-kpis span {
+            display: block;
+            color: var(--xf-text-secondary);
+            font-size: 12px;
+            line-height: 1.2;
+            margin-bottom: 5px;
+        }
+        .xf-insight-kpis strong {
+            display: block;
+            color: var(--xf-text-primary);
+            font-size: 20px;
+            line-height: 1.12;
+            overflow-wrap: anywhere;
+        }
+        .xf-insight-lines {
+            margin: 0;
+            padding-left: 18px;
+            color: var(--xf-text-secondary);
+            font-size: 13.5px;
+            line-height: 1.48;
+        }
+        .xf-insight-lines li {margin: 4px 0;}
         .xf-section {margin-top: var(--xf-space-5); margin-bottom: var(--xf-space-3);}
         .xf-section h3 {
             color: var(--xf-text-primary);
@@ -711,6 +754,7 @@ def inject_global_styles() -> None:
             div[data-testid="stMetric"] {min-height: 104px; padding: 12px;}
             .xf-executive-kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
             .xf-summary-card-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+            .xf-insight-kpis {grid-template-columns: repeat(2, minmax(0, 1fr));}
             .xf-dashboard-header {flex-direction: column; gap: var(--xf-space-3);}
         }
         </style>
