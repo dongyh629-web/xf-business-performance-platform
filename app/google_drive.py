@@ -1044,10 +1044,69 @@ def _dedupe_sales_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     if not subset:
         return df.copy(), {"dedupe_key": "无可用字段", "duplicate_rows_removed": 0}
     before = len(df)
-    deduped = df.drop_duplicates(subset=subset, keep="first").reset_index(drop=True)
+    source_col = "Source File" if "Source File" in df.columns else None
+    source_rank_col = "Source Snapshot Rank" if "Source Snapshot Rank" in df.columns else None
+    if not source_col:
+        deduped = df.copy().reset_index(drop=True)
+        return deduped, {
+            "dedupe_key": label,
+            "duplicate_rows_removed": 0,
+            "cross_file_duplicates_removed": 0,
+            "intra_file_identical_rows_preserved": int(df.duplicated(subset=subset, keep=False).sum()),
+            "ambiguous_duplicates_preserved": 0,
+            "dedupe_scope": "未识别 Source File，保留同文件可能合法重复行。",
+        }
+
+    work = df.copy()
+    work["_xf_original_position"] = range(len(work))
+    if source_rank_col:
+        work["_xf_source_rank"] = pd.to_numeric(work[source_rank_col], errors="coerce").fillna(10**9)
+    else:
+        source_order = {source: rank for rank, source in enumerate(work[source_col].astype("string").fillna("").drop_duplicates().tolist())}
+        work["_xf_source_rank"] = work[source_col].astype("string").fillna("").map(source_order).fillna(10**9)
+
+    key_cols = subset
+    same_file_duplicate_rows = work.duplicated(subset=key_cols + [source_col], keep=False)
+    cross_file_group_sizes = work.groupby(key_cols, dropna=False)[source_col].transform(lambda values: values.astype("string").nunique(dropna=False))
+    cross_file_duplicate_rows = cross_file_group_sizes.gt(1)
+    ambiguous_duplicates_preserved = 0
+    ambiguous_key_cols = [
+        column
+        for column in key_cols
+        if column not in {"Sales Amount"} and column in work.columns
+    ]
+    if "Sales Amount" in work.columns and ambiguous_key_cols:
+        weak_source_counts = work.groupby(ambiguous_key_cols, dropna=False)[source_col].transform(
+            lambda values: values.astype("string").nunique(dropna=False)
+        )
+        weak_amount_counts = work.groupby(ambiguous_key_cols, dropna=False)["Sales Amount"].transform("nunique")
+        ambiguous_duplicates_preserved = int((weak_source_counts.gt(1) & weak_amount_counts.gt(1)).sum())
+
+    keep_mask = pd.Series(True, index=work.index)
+    if cross_file_duplicate_rows.any():
+        latest_rank = work.loc[cross_file_duplicate_rows].groupby(key_cols, dropna=False)["_xf_source_rank"].transform("min")
+        drop_cross_file_old_rows = cross_file_duplicate_rows.copy()
+        drop_cross_file_old_rows.loc[cross_file_duplicate_rows] = (
+            work.loc[cross_file_duplicate_rows, "_xf_source_rank"].to_numpy() != latest_rank.to_numpy()
+        )
+        keep_mask &= ~drop_cross_file_old_rows
+    else:
+        drop_cross_file_old_rows = pd.Series(False, index=work.index)
+
+    deduped = (
+        work.loc[keep_mask]
+        .sort_values("_xf_original_position")
+        .drop(columns=["_xf_original_position", "_xf_source_rank"])
+        .reset_index(drop=True)
+    )
+    duplicate_rows_removed = int(before - len(deduped))
     return deduped, {
         "dedupe_key": label,
-        "duplicate_rows_removed": int(before - len(deduped)),
+        "duplicate_rows_removed": duplicate_rows_removed,
+        "cross_file_duplicates_removed": int(drop_cross_file_old_rows.sum()),
+        "intra_file_identical_rows_preserved": int((same_file_duplicate_rows & ~drop_cross_file_old_rows).sum()),
+        "ambiguous_duplicates_preserved": ambiguous_duplicates_preserved,
+        "dedupe_scope": "同一 Source File 内保留全部原始行；跨 Source File 重叠记录保留较新快照。",
     }
 
 
@@ -1084,6 +1143,9 @@ def _set_drive_sales_merge_stats(stats: dict[str, Any]) -> None:
     st.session_state["drive_sales_input_rows"] = stats.get("input_rows")
     st.session_state["drive_sales_deduped_rows"] = stats.get("deduped_rows")
     st.session_state["drive_sales_duplicate_rows_removed"] = stats.get("duplicate_rows_removed")
+    st.session_state["drive_sales_cross_file_duplicates_removed"] = stats.get("cross_file_duplicates_removed")
+    st.session_state["drive_sales_intra_file_identical_rows_preserved"] = stats.get("intra_file_identical_rows_preserved")
+    st.session_state["drive_sales_ambiguous_duplicates_preserved"] = stats.get("ambiguous_duplicates_preserved")
     st.session_state["drive_sales_new_records"] = stats.get("new_records")
     st.session_state["drive_sales_earliest_date"] = stats.get("earliest_date")
     st.session_state["drive_sales_latest_date"] = stats.get("latest_date")
@@ -1370,7 +1432,20 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
 
     if imported_results:
         raw_frames = [result.raw for _, result in imported_results if result.raw is not None]
-        clean_frames = [result.clean for _, result in imported_results if result.clean is not None and not result.clean.empty]
+        clean_frames = []
+        for source_rank, (candidate, result) in enumerate(imported_results):
+            if result.clean is None or result.clean.empty:
+                continue
+            clean_frame = result.clean.copy()
+            clean_frame["Source File"] = candidate.metadata.name
+            clean_frame["Source Snapshot Rank"] = source_rank
+            clean_frame["Source Modified Time"] = candidate.metadata.modified_time
+            clean_frame["Source Snapshot Date"] = (
+                pd.Timestamp(candidate.filename_date).date().isoformat()
+                if candidate.filename_date is not None and not pd.isna(candidate.filename_date)
+                else pd.NA
+            )
+            clean_frames.append(clean_frame)
         combined_raw = pd.concat(raw_frames, ignore_index=True, sort=False) if raw_frames else pd.DataFrame()
         combined_clean = pd.concat(clean_frames, ignore_index=True, sort=False) if clean_frames else pd.DataFrame()
         input_rows = int(len(combined_clean))
@@ -1384,6 +1459,9 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             "input_rows": input_rows,
             "deduped_rows": int(len(deduped_clean)),
             "duplicate_rows_removed": dedupe_stats["duplicate_rows_removed"],
+            "cross_file_duplicates_removed": dedupe_stats.get("cross_file_duplicates_removed", dedupe_stats["duplicate_rows_removed"]),
+            "intra_file_identical_rows_preserved": dedupe_stats.get("intra_file_identical_rows_preserved", 0),
+            "ambiguous_duplicates_preserved": dedupe_stats.get("ambiguous_duplicates_preserved", 0),
             "new_records": new_records,
             "earliest_date": earliest_date,
             "latest_date": latest_date,
@@ -1400,6 +1478,9 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
                 "Google Drive 合并前行数": input_rows,
                 "Google Drive 去重后行数": int(len(deduped_clean)),
                 "Google Drive 跨文件去重行数": dedupe_stats["duplicate_rows_removed"],
+                "Google Drive 同文件完全相同行保留数": dedupe_stats.get("intra_file_identical_rows_preserved", 0),
+                "Google Drive 跨文件重复删除行数": dedupe_stats.get("cross_file_duplicates_removed", dedupe_stats["duplicate_rows_removed"]),
+                "Google Drive 模糊重复保留行数": dedupe_stats.get("ambiguous_duplicates_preserved", 0),
                 "Google Drive 本次新增记录数": new_records,
                 "Google Drive 最早日期": earliest_date,
                 "Google Drive 最新日期": latest_date,
