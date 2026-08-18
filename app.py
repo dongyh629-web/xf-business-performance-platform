@@ -222,9 +222,9 @@ NAV_GROUPS = [
         "key": "returns",
         "area": "returns",
         "label": "Credit Notes",
-        "english": "贷项通知单",
+        "english": "",
         "items": [
-            {"title": "贷项通知单经营分析", "english": "Credit Notes Analysis", "page": "pages/9_Returns_Credits.py"},
+            {"title": "Credit Analysis", "english": "", "page": "pages/9_Returns_Credits.py"},
         ],
     },
     {
