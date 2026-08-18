@@ -15,7 +15,7 @@ from app.credit_metrics import (
     sales_for_credit_period,
 )
 from app.credit_notes import CREDIT_FILE_PATTERN, filter_credit_by_date
-from app.google_drive import ensure_drive_data_loaded, load_drive_credit_snapshot, render_drive_data_load_prompt, render_data_source_sidebar
+from app import google_drive as drive_data
 from app.ui import inject_global_styles, money, percent, render_date_range_inputs, section_header, style_plotly
 
 
@@ -206,20 +206,20 @@ def _render_credit_data_source() -> None:
 
 inject_global_styles()
 require_login("returns")
-drive_status = ensure_drive_data_loaded()
-render_data_source_sidebar(show_uploaders=False)
+drive_status = drive_data.ensure_drive_data_loaded()
+drive_data.render_data_source_sidebar(show_uploaders=False)
 
 sales_df = st.session_state.get("clean_data")
 if sales_df is None:
     st.markdown("## 退货与退款 / Returns & Credits")
     if drive_status and drive_status.sales.status == "failed":
         st.warning(drive_status.sales.message)
-    render_drive_data_load_prompt("尚未加载销售数据", "Returns & Credits 需要先读取销售数据，用于计算 Gross Sales 与 Net Sales。")
+    drive_data.render_drive_data_load_prompt("尚未加载销售数据", "Returns & Credits 需要先读取销售数据，用于计算 Gross Sales 与 Net Sales。")
     st.stop()
 
 _render_header()
 
-_registry, _snapshot = load_drive_credit_snapshot(force=False)
+_registry, _snapshot = drive_data.load_drive_credit_snapshot(force=False)
 
 section_header("Credit Data Source / Credit 数据来源")
 _render_credit_data_source()
