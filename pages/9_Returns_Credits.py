@@ -41,10 +41,10 @@ def _render_header() -> None:
     st.markdown(
         """
         <div class="xf-credits-header">
-            <div class="xf-credits-title-cn">退货与退款经营分析</div>
-            <div class="xf-credits-title-en">Returns & Credits</div>
-            <div class="xf-credits-subtitle-cn">快速判断退款规模、主要问题来源，以及需要关注的客户与产品。</div>
-            <div class="xf-credits-subtitle-en">Review credit exposure, key drivers, and customer/product risk in one view.</div>
+            <div class="xf-credits-title-cn">Credit Notes Analysis</div>
+            <div class="xf-credits-title-en">贷项通知单经营分析</div>
+            <div class="xf-credits-subtitle-cn">分析 Credit Notes 对销售、客户、产品及经营结果的影响。</div>
+            <div class="xf-credits-subtitle-en">Review the impact of Credit Notes on sales, customers, products and overall business performance.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -386,10 +386,10 @@ drive_data.render_data_source_sidebar(show_uploaders=False)
 
 sales_df = st.session_state.get("clean_data")
 if sales_df is None:
-    st.markdown("## 退货与退款 / Returns & Credits")
+    st.markdown("## Credit Notes Analysis / 贷项通知单经营分析")
     if drive_status and drive_status.sales.status == "failed":
         st.warning(drive_status.sales.message)
-    drive_data.render_drive_data_load_prompt("尚未加载销售数据", "Returns & Credits 需要先读取销售数据，用于计算 Gross Sales 与 Net Sales。")
+    drive_data.render_drive_data_load_prompt("尚未加载销售数据", "Credit Notes 需要先读取销售数据，用于计算 Gross Sales 与 Net Sales。")
     st.stop()
 
 _render_header()
@@ -407,7 +407,7 @@ date_source = credit_df if not credit_df.empty else sales_df
 date_column = "Credit Date" if not credit_df.empty else ("Performance Date" if "Performance Date" in sales_df.columns else "Completed Date")
 dates = pd.to_datetime(date_source.get(date_column), errors="coerce").dropna()
 if dates.empty:
-    st.warning("当前没有有效日期，无法生成 Returns & Credits 分析。")
+    st.warning("当前没有有效日期，无法生成 Credit Notes 分析。")
     st.stop()
 
 summary_slot = st.container()
