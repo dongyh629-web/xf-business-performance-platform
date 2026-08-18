@@ -109,6 +109,10 @@ class DriveRestTransportTests(unittest.TestCase):
         content = google_drive.download_drive_file(google_drive.DriveRestClient(session), "file-id")
         self.assertEqual(b"excel-bytes", content.getvalue())
         self.assertEqual({"alt": "media", "supportsAllDrives": "true"}, session.requests[0]["params"])
+        self.assertEqual(
+            (google_drive.DRIVE_CONNECT_TIMEOUT_SECONDS, google_drive.DRIVE_READ_TIMEOUT_SECONDS),
+            session.requests[0]["timeout"],
+        )
 
     def test_429_retry_succeeds(self) -> None:
         session = _FakeSession([_FakeResponse(429), _FakeResponse(200, {"files": []})])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import time
 from unittest.mock import patch
 
 import pandas as pd
@@ -179,6 +180,23 @@ class DriveRefreshTransactionTests(unittest.TestCase):
         self.assertIn("继续使用旧数据", message)
         self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
         self.assertEqual(100.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
+    def test_stage_timeout_keeps_previous_state(self) -> None:
+        with patch.object(google_drive, "load_drive_cost_snapshots", side_effect=lambda force=True: self._cost_success()), patch.object(
+            google_drive, "_raise_if_stage_timeout", side_effect=DriveUserError("stage timeout")
+        ):
+            status, message = google_drive.refresh_drive_data_transaction()
+
+        self.assertIsNone(status)
+        self.assertIn("继续使用旧数据", message)
+        self.assertEqual(["old_cost"], self.fake_st.session_state["cost_snapshots"])
+        self.assertEqual(100.0, float(self.fake_st.session_state["clean_data"]["Sales Amount"].sum()))
+
+    def test_blocking_parse_timeout_raises_user_safe_error(self) -> None:
+        started = time.perf_counter()
+        with self.assertRaises(DriveUserError):
+            google_drive._run_blocking_stage("sales_parse", 0.05, lambda: time.sleep(1))
+        self.assertLess(time.perf_counter() - started, 0.8)
 
 
 class DriveStartupLoadingTests(unittest.TestCase):

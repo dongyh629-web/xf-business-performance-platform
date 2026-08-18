@@ -9,8 +9,11 @@ import logging
 from pathlib import Path
 import pickle
 import re
+import signal
+import threading
 import time
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from typing import Any, Callable, TypeVar
 
 import pandas as pd
 import streamlit as st
@@ -80,6 +83,19 @@ REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_s
 SUCCESSFUL_REFRESH_STATUSES = {"loaded", "cached", "unchanged"}
 REFRESH_TRANSACTION_TIMEOUT_SECONDS = 180
 REFRESH_STALE_LOCK_SECONDS = 120
+DRIVE_CONNECT_TIMEOUT_SECONDS = 5
+DRIVE_READ_TIMEOUT_SECONDS = 30
+DRIVE_CREDENTIALS_REFRESH_TIMEOUT_SECONDS = 20
+SALES_STAGE_TIMEOUT_SECONDS = 150
+TARGET_STAGE_TIMEOUT_SECONDS = 45
+COST_STAGE_TIMEOUT_SECONDS = 75
+CREDIT_STAGE_TIMEOUT_SECONDS = 60
+SALES_PARSE_TIMEOUT_SECONDS = 90
+TARGET_PARSE_TIMEOUT_SECONDS = 30
+COST_PARSE_TIMEOUT_SECONDS = 30
+CREDIT_PARSE_TIMEOUT_SECONDS = 30
+
+T = TypeVar("T")
 
 
 class DriveUserError(RuntimeError):
@@ -135,7 +151,7 @@ class DriveFileCandidate:
 
 class DriveRestClient:
     BASE_URL = "https://www.googleapis.com/drive/v3"
-    TIMEOUT = (5, 30)
+    TIMEOUT = (DRIVE_CONNECT_TIMEOUT_SECONDS, DRIVE_READ_TIMEOUT_SECONDS)
 
     def __init__(self, session):
         self._session = session
@@ -145,7 +161,16 @@ class DriveRestClient:
 
     def _request_json(self, stage: str, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         def operation():
+            request_start = _timer()
+            logger.info("drive_request_started stage=%s method=%s", stage, method)
             response = self._session.request(method, url, timeout=self.TIMEOUT, **kwargs)
+            logger.info(
+                "drive_request_completed stage=%s method=%s elapsed_seconds=%.3f status_code=%s",
+                stage,
+                method,
+                _elapsed_seconds(request_start),
+                response.status_code,
+            )
             if response.status_code >= 400:
                 raise GoogleHttpStatusError(response.status_code, stage)
             if not response.content:
@@ -156,7 +181,17 @@ class DriveRestClient:
 
     def _request_bytes(self, stage: str, method: str, url: str, **kwargs: Any) -> bytes:
         def operation():
+            request_start = _timer()
+            logger.info("drive_request_started stage=%s method=%s", stage, method)
             response = self._session.request(method, url, timeout=self.TIMEOUT, **kwargs)
+            logger.info(
+                "drive_request_completed stage=%s method=%s elapsed_seconds=%.3f status_code=%s bytes=%s",
+                stage,
+                method,
+                _elapsed_seconds(request_start),
+                response.status_code,
+                len(response.content or b""),
+            )
             if response.status_code >= 400:
                 raise GoogleHttpStatusError(response.status_code, stage)
             return bytes(response.content)
@@ -213,6 +248,70 @@ def _raise_if_refresh_deadline_expired(start: float, stage: str, timeout_seconds
             elapsed,
         )
         raise DriveUserError("Google Drive 数据加载超时，请稍后重试。")
+
+
+class _StageTimeout(RuntimeError):
+    pass
+
+
+def _timeout_message(stage: str, timeout_seconds: int) -> str:
+    return f"{stage} 超过 {timeout_seconds} 秒未完成。"
+
+
+def _run_with_signal_timeout(stage: str, timeout_seconds: int, operation: Callable[[], T]) -> T:
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(_signum, _frame):
+        raise _StageTimeout(_timeout_message(stage, timeout_seconds))
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        return operation()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def _run_with_thread_timeout(stage: str, timeout_seconds: int, operation: Callable[[], T]) -> T:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"xf-{stage}")
+    future = executor.submit(operation)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        future.cancel()
+        raise _StageTimeout(_timeout_message(stage, timeout_seconds)) from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _run_blocking_stage(stage: str, timeout_seconds: int, operation: Callable[[], T]) -> T:
+    """Run a blocking parse stage with a bounded wait and user-safe timeout."""
+    start = _timer()
+    logger.info("%s_started timeout_seconds=%s", stage, timeout_seconds)
+    try:
+        if hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread():
+            result = _run_with_signal_timeout(stage, timeout_seconds, operation)
+        else:
+            result = _run_with_thread_timeout(stage, timeout_seconds, operation)
+        logger.info("%s_completed elapsed_seconds=%.3f", stage, _elapsed_seconds(start))
+        return result
+    except _StageTimeout as exc:
+        logger.warning("%s_failed elapsed_seconds=%.3f error_type=Timeout", stage, _elapsed_seconds(start))
+        raise DriveUserError(f"{stage} 超时，请稍后重试。") from exc
+    except DriveUserError:
+        logger.warning("%s_failed elapsed_seconds=%.3f error_type=DriveUserError", stage, _elapsed_seconds(start))
+        raise
+    except Exception as exc:
+        logger.warning("%s_failed elapsed_seconds=%.3f error_type=%s", stage, _elapsed_seconds(start), exc.__class__.__name__)
+        raise
+
+
+def _raise_if_stage_timeout(start: float, stage: str, timeout_seconds: int) -> None:
+    elapsed = _elapsed_seconds(start)
+    if elapsed > timeout_seconds:
+        logger.warning("%s_failed elapsed_seconds=%.3f error_type=StageTimeout", stage, elapsed)
+        raise DriveUserError(f"{stage} 超过 {timeout_seconds} 秒未完成，请稍后重试。")
 
 
 def _ensure_cache_dir() -> None:
@@ -297,6 +396,7 @@ def _write_sales_cache(
 ) -> None:
     start = _timer()
     try:
+        logger.info("cache_write_started cache=sales rows=%s", len(result.clean))
         _ensure_cache_dir()
         result.clean.to_parquet(CACHE_SALES_PATH, index=False)
         extras = {
@@ -328,6 +428,12 @@ def _write_sales_cache(
             }
         )
         _write_cache_metadata(cache_metadata)
+        logger.info(
+            "cache_write_completed cache=sales elapsed_seconds=%.3f rows=%s completed_date_max=%s",
+            _elapsed_seconds(start),
+            len(result.clean),
+            _sales_max_date(result.clean),
+        )
         _perf_log("write_sales_parquet", start, len(result.clean), "miss")
     except Exception:
         logger.exception("Local sales cache write failed")
@@ -363,6 +469,8 @@ def _restore_target_cache(metadata: DriveFileMetadata | None = None) -> bool:
 def _write_target_cache(metadata: DriveFileMetadata, parsed: XFTargetWorkbook) -> None:
     start = _timer()
     try:
+        rows = 0 if parsed.company_targets is None else len(parsed.company_targets)
+        logger.info("cache_write_started cache=targets rows=%s source_file=%s", rows, metadata.name)
         _ensure_cache_dir()
         with CACHE_TARGETS_PATH.open("wb") as handle:
             pickle.dump(parsed, handle)
@@ -378,7 +486,7 @@ def _write_target_cache(metadata: DriveFileMetadata, parsed: XFTargetWorkbook) -
             }
         )
         _write_cache_metadata(cache_metadata)
-        rows = 0 if parsed.company_targets is None else len(parsed.company_targets)
+        logger.info("cache_write_completed cache=targets elapsed_seconds=%.3f rows=%s source_file=%s", _elapsed_seconds(start), rows, metadata.name)
         _perf_log("write_target_cache", start, rows, "miss")
     except Exception:
         logger.exception("Local target cache write failed")
@@ -532,7 +640,10 @@ def get_drive_service(config: DriveConfig):
         with stage_timer("google_drive_initialization") as done:
             credentials_start = _timer()
             logger.info("credentials_refresh_started")
-            with_google_transport_retry("drive_credentials_refresh", lambda: credentials.refresh(google_auth_request(timeout=20)))
+            with_google_transport_retry(
+                "drive_credentials_refresh",
+                lambda: credentials.refresh(google_auth_request(timeout=DRIVE_CREDENTIALS_REFRESH_TIMEOUT_SECONDS)),
+            )
             logger.info(
                 "credentials_refresh_completed elapsed_seconds=%.3f",
                 _elapsed_seconds(credentials_start),
@@ -1025,6 +1136,7 @@ def _write_cost_snapshot_cache(
 ) -> None:
     start = _timer()
     try:
+        logger.info("cache_write_started cache=cost snapshots=%s rows=%s", len(snapshots), sum(len(snapshot.data) for snapshot in snapshots))
         _ensure_cache_dir()
         with CACHE_COST_SNAPSHOTS_PATH.open("wb") as handle:
             pickle.dump(
@@ -1048,6 +1160,7 @@ def _write_cost_snapshot_cache(
             }
         )
         _write_cache_metadata(cache_metadata)
+        logger.info("cache_write_completed cache=cost elapsed_seconds=%.3f snapshots=%s", _elapsed_seconds(start), len(snapshots))
         _perf_log("write_cost_snapshots", start, len(snapshots), "miss")
     except Exception:
         logger.exception("Local cost snapshot cache write failed")
@@ -1131,6 +1244,7 @@ def _write_credit_snapshot_cache(
 ) -> None:
     start = _timer()
     try:
+        logger.info("cache_write_started cache=credit rows=%s source_file=%s", len(snapshot.data), snapshot.file_name)
         _ensure_cache_dir()
         with CACHE_CREDIT_SNAPSHOT_PATH.open("wb") as handle:
             pickle.dump(
@@ -1157,6 +1271,7 @@ def _write_credit_snapshot_cache(
             }
         )
         _write_cache_metadata(cache_metadata)
+        logger.info("cache_write_completed cache=credit elapsed_seconds=%.3f rows=%s source_file=%s", _elapsed_seconds(start), len(snapshot.data), snapshot.file_name)
         _perf_log("write_credit_snapshot", start, len(snapshot.data), "miss")
     except Exception:
         logger.exception("Local credit snapshot cache write failed")
@@ -1396,6 +1511,8 @@ def store_sales_import_in_session(result: ImportResult, file_name: str, source_l
 
 
 def _sales_max_date(clean: pd.DataFrame) -> str:
+    if clean is None or "Performance Date" not in clean.columns:
+        return ""
     dates = pd.to_datetime(clean.get("Performance Date"), errors="coerce").dropna()
     return "" if dates.empty else str(dates.max().date())
 
@@ -1507,6 +1624,7 @@ def store_target_workbook_in_session(parsed: XFTargetWorkbook, file_name: str, s
 
 def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItemStatus:
     st = _get_streamlit()
+    stage_start = _timer()
     if (
         not force
         and st.session_state.get("sales_source_type") == "manual"
@@ -1558,6 +1676,7 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             previous_clean = None
     logger.info("Google Drive sales candidate attempt order: %s", [candidate.metadata.name for candidate in candidates])
     for candidate in candidates:
+        _raise_if_stage_timeout(stage_start, "sales_load", SALES_STAGE_TIMEOUT_SECONDS)
         metadata = candidate.metadata
         try:
             candidate_start = _timer()
@@ -1572,7 +1691,11 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             logger.info("sales_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", metadata.name, _elapsed_seconds(candidate_start), len(content))
             parse_start = _timer()
             logger.info("sales_parse_started file_name=%s", metadata.name)
-            result = import_excel(_NamedBytesIO(content, metadata.name))
+            result = _run_blocking_stage(
+                "sales_parse",
+                SALES_PARSE_TIMEOUT_SECONDS,
+                lambda content=content, name=metadata.name: import_excel(_NamedBytesIO(content, name)),
+            )
             _validate_sales_result(result)
             logger.info("sales_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", metadata.name, _elapsed_seconds(parse_start), len(result.clean))
         except ValueError as exc:
@@ -1587,6 +1710,7 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             failures.append(f"{metadata.name}: 解析失败（{exc.__class__.__name__}: {exc}）")
             logger.exception("Google Drive sales parse failed file_name=%s", metadata.name)
             continue
+        _raise_if_stage_timeout(stage_start, "sales_load", SALES_STAGE_TIMEOUT_SECONDS)
         imported_results.append((candidate, result))
 
     if imported_results:
@@ -1666,10 +1790,12 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
             st.session_state.pop("drive_sales_failure_details", None)
             st.session_state.pop("drive_sales_content_warning", None)
         logger.info(
-            "Google Drive sales merged files=%s input_rows=%s deduped_rows=%s duplicate_rows_removed=%s new_records=%s earliest=%s latest=%s failed=%s",
+            "sales_loaded_summary source_file=%s rows=%s completed_date_max=%s loaded_files=%s input_rows=%s duplicate_rows_removed=%s new_records=%s earliest=%s latest=%s failed=%s",
+            MERGED_SALES_FILE_NAME,
+            len(deduped_clean),
+            _sales_max_date(deduped_clean),
             loaded_files,
             input_rows,
-            len(deduped_clean),
             dedupe_stats["duplicate_rows_removed"],
             new_records,
             earliest_date,
@@ -1696,6 +1822,7 @@ def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItem
 
 def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadItemStatus:
     st = _get_streamlit()
+    stage_start = _timer()
     if (
         not force
         and st.session_state.get("target_source_type") == "manual"
@@ -1738,6 +1865,7 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
 
     failures: list[str] = []
     for candidate in candidates:
+        _raise_if_stage_timeout(stage_start, "targets_load", TARGET_STAGE_TIMEOUT_SECONDS)
         metadata = candidate.metadata
         try:
             candidate_start = _timer()
@@ -1746,7 +1874,11 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
             logger.info("targets_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", metadata.name, _elapsed_seconds(candidate_start), len(content))
             parse_start = _timer()
             logger.info("targets_parse_started file_name=%s", metadata.name)
-            parsed = parse_xf_target_workbook(_NamedBytesIO(content, metadata.name))
+            parsed = _run_blocking_stage(
+                "targets_parse",
+                TARGET_PARSE_TIMEOUT_SECONDS,
+                lambda content=content, name=metadata.name: parse_xf_target_workbook(_NamedBytesIO(content, name)),
+            )
             _validate_target_workbook(parsed)
             logger.info("targets_parse_completed file_name=%s elapsed_seconds=%.3f", metadata.name, _elapsed_seconds(parse_start))
         except ValueError as exc:
@@ -1767,7 +1899,14 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
         reason = _target_selection_reason(candidate, analysis_year)
         _set_drive_target_success(metadata, parsed, reason, candidates)
         _write_target_cache(metadata, parsed)
-        logger.info("Google Drive target selected file=%s reason=%s", metadata.name, reason)
+        target_rows = len(st.session_state.get("target_data", [])) if st.session_state.get("target_data") is not None else 0
+        logger.info(
+            "targets_loaded_summary source_file=%s rows=%s target_year=%s reason=%s",
+            metadata.name,
+            target_rows,
+            parsed.target_year,
+            reason,
+        )
         return DriveLoadItemStatus("loaded", "目标数据已从 Google Drive 加载。", metadata.name, metadata.modified_time, metadata.file_id)
 
     if st.session_state.get("target_data") is not None:
@@ -1864,6 +2003,7 @@ def load_drive_business_files(force: bool = False) -> DriveLoadStatus:
 
 def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry, list[CostSnapshot]]:
     start = _timer()
+    stage_start = _timer()
     session_cost = _get_session_cost_snapshots()
     if not force and session_cost is not None:
         registry, snapshots = session_cost
@@ -1914,6 +2054,7 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
     try:
         with stage_timer("cost_snapshot_load") as done:
             for entry in registry.entries:
+                _raise_if_stage_timeout(stage_start, "cost_load", COST_STAGE_TIMEOUT_SECONDS)
                 if not entry.participates_in_matching:
                     continue
                 try:
@@ -1923,7 +2064,11 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
                     logger.info("cost_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", entry.file_name, _elapsed_seconds(snapshot_start), len(content))
                     parse_start = _timer()
                     logger.info("cost_parse_started file_name=%s", entry.file_name)
-                    snapshot = load_cost_snapshot_from_bytes(content, entry)
+                    snapshot = _run_blocking_stage(
+                        "cost_parse",
+                        COST_PARSE_TIMEOUT_SECONDS,
+                        lambda content=content, entry=entry: load_cost_snapshot_from_bytes(content, entry),
+                    )
                     logger.info("cost_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", entry.file_name, _elapsed_seconds(parse_start), len(snapshot.data))
                 except Exception as exc:
                     entry.validation_status = "Invalid"
@@ -1940,6 +2085,7 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
                 entry.participates_in_matching = snapshot.registry_entry.participates_in_matching
                 if snapshot.registry_entry.participates_in_matching:
                     snapshots.append(snapshot)
+                _raise_if_stage_timeout(stage_start, "cost_load", COST_STAGE_TIMEOUT_SECONDS)
             done(rows=len(snapshots), status="loaded")
     finally:
         close_google_service(service)
@@ -1959,12 +2105,20 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
 
     _write_cost_snapshot_cache(registry, snapshots, manifest, manifest_signature)
     _set_session_cost_snapshots(registry, snapshots, "loaded", "成本快照已从 Google Drive 加载。")
+    logger.info(
+        "cost_loaded_summary snapshots=%s rows=%s versions=%s source_files=%s",
+        len(snapshots),
+        sum(len(snapshot.data) for snapshot in snapshots),
+        [str(snapshot.snapshot_date.date()) for snapshot in snapshots],
+        [snapshot.file_name for snapshot in snapshots],
+    )
     _perf_log("load_drive_cost_snapshots", start, len(snapshots), "drive")
     return registry, snapshots
 
 
 def load_drive_credit_snapshot(force: bool = False) -> tuple[CreditSnapshotRegistry, CreditSnapshot | None]:
     start = _timer()
+    stage_start = _timer()
     session_credit = _get_session_credit_snapshot()
     if not force and session_credit is not None:
         registry, snapshot = session_credit
@@ -2025,14 +2179,20 @@ def load_drive_credit_snapshot(force: bool = False) -> tuple[CreditSnapshotRegis
     try:
         with stage_timer("credit_snapshot_load") as done:
             try:
+                _raise_if_stage_timeout(stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
                 snapshot_start = _timer()
                 logger.info("credit_download_started file_name=%s", selected_entry.file_name)
                 content = download_drive_file(service, str(selected_entry.file_id)).getvalue()
                 logger.info("credit_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", selected_entry.file_name, _elapsed_seconds(snapshot_start), len(content))
                 parse_start = _timer()
                 logger.info("credit_parse_started file_name=%s", selected_entry.file_name)
-                snapshot = load_credit_snapshot_from_bytes(content, selected_entry)
+                snapshot = _run_blocking_stage(
+                    "credit_parse",
+                    CREDIT_PARSE_TIMEOUT_SECONDS,
+                    lambda content=content, entry=selected_entry: load_credit_snapshot_from_bytes(content, entry),
+                )
                 logger.info("credit_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", selected_entry.file_name, _elapsed_seconds(parse_start), len(snapshot.data))
+                _raise_if_stage_timeout(stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
             except Exception as exc:
                 selected_entry.validation_status = "Invalid"
                 selected_entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
@@ -2056,6 +2216,15 @@ def load_drive_credit_snapshot(force: bool = False) -> tuple[CreditSnapshotRegis
 
     _write_credit_snapshot_cache(registry, snapshot, manifest, manifest_signature)
     _set_session_credit_snapshot(registry, snapshot, "loaded", "Credit Notes 已从 Google Drive 加载。")
+    dates = pd.to_datetime(snapshot.data.get("Credit Date"), errors="coerce").dropna()
+    date_range = "无" if dates.empty else f"{dates.min().date()} 至 {dates.max().date()}"
+    logger.info(
+        "credit_loaded_summary source_file=%s rows=%s credit_notes=%s date_range=%s",
+        snapshot.file_name,
+        len(snapshot.data),
+        snapshot.quality.get("Credit Note Count", 0),
+        date_range,
+    )
     _perf_log("load_drive_credit_snapshot", start, len(snapshot.data), "drive")
     return registry, snapshot
 
@@ -2121,7 +2290,9 @@ def refresh_credit_notes_transaction() -> tuple[CreditSnapshot | None, str]:
     logger.info("credit_refresh_transaction_started")
     previous_state = _snapshot_refresh_state()
     try:
+        credit_stage_start = _timer()
         registry, snapshot = load_drive_credit_snapshot(force=True)
+        _raise_if_stage_timeout(credit_stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
         _raise_if_refresh_deadline_expired(refresh_start, "credit_snapshot_load")
     except DriveUserError as exc:
         _restore_refresh_state(previous_state)
@@ -2154,8 +2325,10 @@ def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
     previous_state = _snapshot_refresh_state()
     clear_drive_state()
     try:
+        cost_stage_start = _timer()
         logger.info("cost_load_started")
         _registry, cost_snapshots = load_drive_cost_snapshots(force=True)
+        _raise_if_stage_timeout(cost_stage_start, "cost_load", COST_STAGE_TIMEOUT_SECONDS)
         logger.info("cost_load_completed elapsed_seconds=%.3f rows=%s", _elapsed_seconds(refresh_start), len(cost_snapshots))
     except DriveUserError as exc:
         _restore_refresh_state(previous_state)
@@ -2182,7 +2355,9 @@ def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
 
     logger.info("drive_file_discovery_started")
     logger.info("sales_load_started")
+    business_stage_start = _timer()
     refreshed = load_drive_business_files(force=True)
+    _raise_if_stage_timeout(business_stage_start, "business_files_load", SALES_STAGE_TIMEOUT_SECONDS + TARGET_STAGE_TIMEOUT_SECONDS)
     logger.info("drive_file_discovery_completed elapsed_seconds=%.3f", _elapsed_seconds(refresh_start))
     clean = _get_streamlit().session_state.get("clean_data")
     logger.info(
@@ -2212,7 +2387,14 @@ def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
         messages.append(cost_status.message)
     if refreshed.targets.message:
         messages.append(refreshed.targets.message)
-    logger.info("refresh_transaction_completed elapsed_seconds=%.3f", _elapsed_seconds(refresh_start))
+    clean = _get_streamlit().session_state.get("clean_data")
+    logger.info(
+        "refresh_transaction_completed elapsed_seconds=%.3f sales_rows=%s completed_date_max=%s source_file=%s",
+        _elapsed_seconds(refresh_start),
+        len(clean) if clean is not None else None,
+        _sales_max_date(clean) if clean is not None else "无",
+        _get_streamlit().session_state.get("drive_sales_file_name") or _get_streamlit().session_state.get("source_file_name") or "无",
+    )
     return refreshed, "；".join(message for message in messages if message)
 
 
