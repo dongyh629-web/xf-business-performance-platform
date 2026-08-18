@@ -1194,6 +1194,8 @@ def _restore_credit_snapshot_cache(manifest_signature: str | None = None) -> tup
 
 def _get_session_credit_snapshot() -> tuple[CreditSnapshotRegistry, CreditSnapshot] | None:
     st = _get_streamlit()
+    if st.session_state.get("credit_snapshot_mode") != MERGED_CREDIT_SNAPSHOT_CACHE_MODE:
+        return None
     registry = st.session_state.get("credit_snapshot_registry")
     snapshot = st.session_state.get("credit_snapshot")
     if isinstance(registry, CreditSnapshotRegistry) and isinstance(snapshot, CreditSnapshot):
@@ -1216,6 +1218,7 @@ def _set_session_credit_snapshot(
         st.session_state["credit_source_name"] = snapshot.file_name
         st.session_state["credit_sheet_name"] = "Google Drive Snapshot"
         st.session_state["credit_raw_columns"] = list(snapshot.data.columns)
+        st.session_state["credit_snapshot_mode"] = MERGED_CREDIT_SNAPSHOT_CACHE_MODE
         st.session_state["drive_credit_latest_snapshot"] = str(snapshot.snapshot_date.date())
         st.session_state["drive_credit_file_name"] = snapshot.file_name
         st.session_state["drive_credit_row_count"] = len(snapshot.data)
@@ -1226,6 +1229,7 @@ def _set_session_credit_snapshot(
         st.session_state.pop("credit_snapshot", None)
         st.session_state.pop("credit_data", None)
         st.session_state.pop("credit_quality", None)
+        st.session_state.pop("credit_snapshot_mode", None)
         st.session_state["drive_credit_latest_snapshot"] = "无"
         st.session_state["drive_credit_file_name"] = "无"
         st.session_state["drive_credit_row_count"] = 0

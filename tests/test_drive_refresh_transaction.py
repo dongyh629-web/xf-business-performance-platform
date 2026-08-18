@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from app.cost_snapshots import CostSnapshot, CostSnapshotRegistry, CostSnapshotRegistryEntry
-from app.credit_notes import build_credit_snapshot_registry
+from app.credit_notes import CreditSnapshot, build_credit_snapshot_registry
 from app import google_drive
 from app.google_drive import DriveLoadItemStatus, DriveLoadStatus, DriveUserError
 
@@ -293,6 +293,32 @@ class DriveRefreshTransactionTests(unittest.TestCase):
         self.assertEqual(2, snapshot.quality["Credit Note Count"])
         self.assertEqual(40.0, snapshot.quality["Credit Amount"])
         self.assertEqual({"XF_Credit_2026-07-31.xlsx", "XF_Credit_2026-08-14.xlsx"}, set(snapshot.data["Source File"]))
+
+    def test_legacy_credit_session_without_merge_mode_is_not_reused(self) -> None:
+        registry = build_credit_snapshot_registry(
+            [{"id": "new", "name": "XF_Credit_2026-08-14.xlsx", "modifiedTime": "2026-08-14T00:00:00Z"}]
+        )
+        entry = registry.valid_entries()[0]
+        legacy_snapshot = CreditSnapshot(
+            snapshot_date=entry.snapshot_date,
+            file_name=entry.file_name,
+            data=pd.DataFrame({"Credit Date": pd.to_datetime(["2026-08-01"]), "Credit Number": ["CN-1"]}),
+            quality={"Credit Note Count": 1},
+            registry_entry=entry,
+        )
+        self.fake_st.session_state["credit_snapshot_registry"] = registry
+        self.fake_st.session_state["credit_snapshot"] = legacy_snapshot
+        self.fake_st.session_state["credit_data"] = legacy_snapshot.data
+
+        with patch.object(google_drive, "_restore_credit_snapshot_cache", return_value=None), patch.object(
+            google_drive, "get_drive_service"
+        ) as service_factory:
+            returned_registry, snapshot = google_drive.load_drive_credit_snapshot(force=False)
+
+        service_factory.assert_not_called()
+        self.assertIsNone(snapshot)
+        self.assertEqual([], returned_registry.entries)
+        self.assertEqual("not_loaded", self.fake_st.session_state["drive_credit_status"])
 
 
 class DriveStartupLoadingTests(unittest.TestCase):
