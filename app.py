@@ -158,6 +158,7 @@ home_page = st.Page(render_home_page, title="首页", default=True)
 sales_tracking_page = st.Page("pages/4_经营追踪.py", title="销售经营")
 product_range_page = st.Page("pages/6_产品系列经营追踪.py", title="产品系列")
 profitability_page = st.Page("pages/7_Profitability.py", title="Profitability")
+returns_credits_page = st.Page("pages/9_Returns_Credits.py", title="Returns & Credits")
 customer_analysis_page = st.Page("pages/2_客户分析.py", title="客户分析")
 customer_health_page = st.Page("pages/5_客户健康.py", title="客户健康")
 product_analysis_page = st.Page("pages/3_产品分析.py", title="产品分析")
@@ -175,6 +176,8 @@ if role_allows(auth_user.role, "finance"):
     profit_pages = []
     if role_allows(auth_user.role, "margin"):
         profit_pages.append(profitability_page)
+    if role_allows(auth_user.role, "returns"):
+        profit_pages.append(returns_credits_page)
     if role_allows(auth_user.role, "data_validation"):
         profit_pages.append(data_validation_page)
     if profit_pages:
@@ -222,6 +225,7 @@ NAV_GROUPS = [
         "english": "Profitability",
         "items": [
             {"title": "利润分析", "english": "Profitability", "page": "pages/7_Profitability.py", "permission": "margin"},
+            {"title": "退货与退款", "english": "Returns & Credits", "page": "pages/9_Returns_Credits.py", "permission": "returns"},
             {"title": "数据验证", "english": "Data Validation", "page": "pages/8_Data_Validation.py", "permission": "data_validation"},
         ],
     },

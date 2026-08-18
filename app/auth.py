@@ -68,6 +68,7 @@ ROLE_PERMISSIONS = {
         "margin",
         "target",
         "finance",
+        "returns",
     },
     "Executive": {
         "overview",
@@ -82,6 +83,7 @@ ROLE_PERMISSIONS = {
         "margin",
         "target",
         "finance",
+        "returns",
     },
     "Sales": {
         "overview",
@@ -110,6 +112,7 @@ ROLE_PERMISSIONS = {
         "margin",
         "target",
         "finance",
+        "returns",
     },
 }
 ROLE_LOOKUP = {role.casefold(): role for role in ROLE_PERMISSIONS}
