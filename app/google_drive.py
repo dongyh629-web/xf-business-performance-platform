@@ -32,6 +32,7 @@ from app.credit_notes import (
     CreditSnapshotRegistry,
     build_credit_snapshot_registry,
     load_credit_snapshot_from_bytes,
+    merge_credit_snapshots,
 )
 from app.data import ImportResult, import_excel
 from app.google_transport import GoogleHttpStatusError, close_google_service, google_auth_request, stage_timer, with_google_transport_retry
@@ -62,6 +63,7 @@ CACHE_SALES_EXTRAS_PATH = CACHE_DIR / "sales_extras.pkl"
 CACHE_TARGETS_PATH = CACHE_DIR / "targets_clean.pkl"
 CACHE_COST_SNAPSHOTS_PATH = CACHE_DIR / "cost_snapshots.pkl"
 CACHE_CREDIT_SNAPSHOT_PATH = CACHE_DIR / "credit_snapshot.pkl"
+MERGED_CREDIT_SNAPSHOT_CACHE_MODE = "merged_all_snapshots"
 MERGED_SALES_FILE_NAME = "Google Drive 合并销售数据"
 SALES_REFRESH_CORE_KEYS = {
     "drive_auto_load_attempted",
@@ -1176,6 +1178,8 @@ def _restore_credit_snapshot_cache(manifest_signature: str | None = None) -> tup
         cache_signature = payload.get("manifest_signature")
         if manifest_signature and cache_signature != manifest_signature:
             return None
+        if payload.get("snapshot_mode") != MERGED_CREDIT_SNAPSHOT_CACHE_MODE:
+            return None
         registry = payload.get("registry")
         snapshot = payload.get("snapshot")
         if not isinstance(registry, CreditSnapshotRegistry) or not isinstance(snapshot, CreditSnapshot):
@@ -1251,6 +1255,7 @@ def _write_credit_snapshot_cache(
                 {
                     "registry": registry,
                     "snapshot": snapshot,
+                    "snapshot_mode": MERGED_CREDIT_SNAPSHOT_CACHE_MODE,
                     "manifest": manifest,
                     "manifest_signature": manifest_signature,
                     "cache_created_at": _now_text(),
@@ -1265,6 +1270,7 @@ def _write_credit_snapshot_cache(
                 "credit_manifest_signature": manifest_signature,
                 "credit_snapshot_file_name": snapshot.file_name,
                 "credit_snapshot_date": str(snapshot.snapshot_date.date()),
+                "credit_snapshot_mode": MERGED_CREDIT_SNAPSHOT_CACHE_MODE,
                 "credit_rows": len(snapshot.data),
                 "credit_note_count": snapshot.quality.get("Credit Note Count", 0),
                 "credit_cache_created_at": _now_text(),
@@ -2173,35 +2179,37 @@ def load_drive_credit_snapshot(force: bool = False) -> tuple[CreditSnapshotRegis
         _set_session_credit_snapshot(registry, None, "not_loaded", "Drive 中未找到有效 Credit Snapshot。")
         return registry, None
 
-    selected_entry = valid_entries[0]
-    snapshot: CreditSnapshot | None = None
+    loaded_snapshots: list[CreditSnapshot] = []
     service = get_drive_service(config)
     try:
         with stage_timer("credit_snapshot_load") as done:
-            try:
-                _raise_if_stage_timeout(stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
-                snapshot_start = _timer()
-                logger.info("credit_download_started file_name=%s", selected_entry.file_name)
-                content = download_drive_file(service, str(selected_entry.file_id)).getvalue()
-                logger.info("credit_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", selected_entry.file_name, _elapsed_seconds(snapshot_start), len(content))
-                parse_start = _timer()
-                logger.info("credit_parse_started file_name=%s", selected_entry.file_name)
-                snapshot = _run_blocking_stage(
-                    "credit_parse",
-                    CREDIT_PARSE_TIMEOUT_SECONDS,
-                    lambda content=content, entry=selected_entry: load_credit_snapshot_from_bytes(content, entry),
-                )
-                logger.info("credit_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", selected_entry.file_name, _elapsed_seconds(parse_start), len(snapshot.data))
-                _raise_if_stage_timeout(stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
-            except Exception as exc:
-                selected_entry.validation_status = "Invalid"
-                selected_entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
-                selected_entry.participates_in_matching = False
-                logger.warning("Google Drive credit snapshot rejected file_name=%s reason=%s", selected_entry.file_name, exc.__class__.__name__)
-            done(rows=len(snapshot.data) if snapshot is not None else 0, status="loaded" if snapshot is not None else "failed")
+            for selected_entry in valid_entries:
+                try:
+                    _raise_if_stage_timeout(stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
+                    snapshot_start = _timer()
+                    logger.info("credit_download_started file_name=%s", selected_entry.file_name)
+                    content = download_drive_file(service, str(selected_entry.file_id)).getvalue()
+                    logger.info("credit_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", selected_entry.file_name, _elapsed_seconds(snapshot_start), len(content))
+                    parse_start = _timer()
+                    logger.info("credit_parse_started file_name=%s", selected_entry.file_name)
+                    parsed_snapshot = _run_blocking_stage(
+                        "credit_parse",
+                        CREDIT_PARSE_TIMEOUT_SECONDS,
+                        lambda content=content, entry=selected_entry: load_credit_snapshot_from_bytes(content, entry),
+                    )
+                    loaded_snapshots.append(parsed_snapshot)
+                    logger.info("credit_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", selected_entry.file_name, _elapsed_seconds(parse_start), len(parsed_snapshot.data))
+                    _raise_if_stage_timeout(stage_start, "credit_load", CREDIT_STAGE_TIMEOUT_SECONDS)
+                except Exception as exc:
+                    selected_entry.validation_status = "Invalid"
+                    selected_entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
+                    selected_entry.participates_in_matching = False
+                    logger.warning("Google Drive credit snapshot rejected file_name=%s reason=%s", selected_entry.file_name, exc.__class__.__name__)
+            done(rows=sum(len(snapshot.data) for snapshot in loaded_snapshots), status="loaded" if loaded_snapshots else "failed")
     finally:
         close_google_service(service)
 
+    snapshot = merge_credit_snapshots(loaded_snapshots)
     manifest = _credit_manifest(registry)
     manifest_signature = _credit_manifest_signature(manifest)
     if snapshot is None:

@@ -311,6 +311,90 @@ def load_credit_snapshot_from_bytes(content: bytes, entry: CreditSnapshotRegistr
     )
 
 
+def _credit_dedupe_subset(data: pd.DataFrame) -> list[str]:
+    return [
+        column
+        for column in [
+            "Credit Number",
+            "Customer Key",
+            "Product Key",
+            "Credit Date",
+            "Quantity",
+            "Credit Amount",
+        ]
+        if column in data.columns
+    ]
+
+
+def merge_credit_snapshots(snapshots: list[CreditSnapshot]) -> CreditSnapshot | None:
+    valid_snapshots = [snapshot for snapshot in snapshots if snapshot is not None and not snapshot.data.empty]
+    if not valid_snapshots:
+        return None
+
+    ordered = sorted(valid_snapshots, key=lambda snapshot: snapshot.snapshot_date, reverse=True)
+    frames: list[pd.DataFrame] = []
+    for rank, snapshot in enumerate(ordered):
+        frame = snapshot.data.copy()
+        frame["Source Snapshot Date"] = snapshot.snapshot_date
+        frame["Source Snapshot Rank"] = rank
+        frame["Source Snapshot File"] = snapshot.file_name
+        frames.append(frame)
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    subset = _credit_dedupe_subset(combined)
+    if subset and "Source File" in combined.columns:
+        work = combined.copy()
+        work["_credit_original_position"] = range(len(work))
+        source_col = "Source File"
+        same_file_duplicate_rows = work.duplicated(subset=subset + [source_col], keep=False)
+        cross_file_group_sizes = work.groupby(subset, dropna=False)[source_col].transform(
+            lambda values: values.astype("string").nunique(dropna=False)
+        )
+        cross_file_duplicate_rows = cross_file_group_sizes.gt(1)
+        drop_cross_file_old_rows = pd.Series(False, index=work.index)
+        if cross_file_duplicate_rows.any():
+            latest_rank = work.loc[cross_file_duplicate_rows].groupby(subset, dropna=False)["Source Snapshot Rank"].transform("min")
+            drop_cross_file_old_rows.loc[cross_file_duplicate_rows] = (
+                work.loc[cross_file_duplicate_rows, "Source Snapshot Rank"].to_numpy() != latest_rank.to_numpy()
+            )
+        combined = (
+            work.loc[~drop_cross_file_old_rows]
+            .sort_values("_credit_original_position")
+            .drop(columns=["_credit_original_position"])
+            .reset_index(drop=True)
+        )
+        combined.attrs["credit_dedupe"] = {
+            "dedupe_key": " + ".join(subset),
+            "cross_file_duplicates_removed": int(drop_cross_file_old_rows.sum()),
+            "intra_file_identical_rows_preserved": int((same_file_duplicate_rows & ~drop_cross_file_old_rows).sum()),
+            "dedupe_scope": "同一 Source File 内保留全部原始行；跨 Source File 重叠记录保留较新 Credit Snapshot。",
+        }
+
+    quality = validate_credit_notes(combined)
+    latest = ordered[0]
+    merged_entry = CreditSnapshotRegistryEntry(
+        snapshot_date=latest.snapshot_date,
+        file_name=latest.file_name,
+        file_id=latest.registry_entry.file_id,
+        modified_time=latest.registry_entry.modified_time,
+        size=latest.registry_entry.size,
+        row_count=int(len(combined)),
+        credit_note_count=int(quality.get("Credit Note Count", 0)),
+        credit_amount=float(quality.get("Credit Amount", 0.0)),
+        validation_status="Valid",
+    )
+    dates = pd.to_datetime(combined.get("Credit Date"), errors="coerce").dropna()
+    merged_entry.date_min = None if dates.empty else str(dates.min().date())
+    merged_entry.date_max = None if dates.empty else str(dates.max().date())
+    return CreditSnapshot(
+        snapshot_date=latest.snapshot_date,
+        file_name=latest.file_name,
+        data=combined,
+        quality=quality,
+        registry_entry=merged_entry,
+    )
+
+
 def filter_credit_by_date(data: pd.DataFrame, start_date, end_date) -> pd.DataFrame:
     if data is None or data.empty or "Credit Date" not in data.columns:
         return data.iloc[0:0].copy() if isinstance(data, pd.DataFrame) else pd.DataFrame()

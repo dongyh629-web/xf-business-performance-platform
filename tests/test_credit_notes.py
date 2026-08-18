@@ -15,6 +15,7 @@ from app.credit_metrics import (
 )
 from app.credit_notes import UNKNOWN_REASON, import_credit_enquiry
 from app.credit_notes import build_credit_snapshot_registry, parse_credit_snapshot_date_from_filename
+from app.credit_notes import load_credit_snapshot_from_bytes, merge_credit_snapshots
 
 
 def _credit_workbook(rows: list[dict], header_offset: int = 2) -> BytesIO:
@@ -47,6 +48,108 @@ class CreditNotesTest(unittest.TestCase):
 
         self.assertEqual(["XF_Credit_2026-08-14.xlsx", "XF_Credit_2026-07-31.xlsx", "CreditEnquiryList.xlsx"], [entry.file_name for entry in registry.entries])
         self.assertEqual(["XF_Credit_2026-08-14.xlsx", "XF_Credit_2026-07-31.xlsx"], [entry.file_name for entry in registry.valid_entries()])
+
+    def test_credit_snapshots_merge_all_versions_and_keep_latest_overlap(self) -> None:
+        registry = build_credit_snapshot_registry(
+            [
+                {"id": "old", "name": "XF_Credit_2026-07-31.xlsx", "modifiedTime": "2026-07-31T00:00:00Z"},
+                {"id": "new", "name": "XF_Credit_2026-08-14.xlsx", "modifiedTime": "2026-08-14T00:00:00Z"},
+            ]
+        )
+        entries = {entry.file_name: entry for entry in registry.valid_entries()}
+        old_snapshot = load_credit_snapshot_from_bytes(
+            _credit_workbook(
+                [
+                    {
+                        "Credit Date": "2026-07-15",
+                        "Credit Number": "CN-OLD",
+                        "Customer": "Customer A",
+                        "Product": "Product A",
+                        "Quantity": 1,
+                        "Sub Total": -10,
+                    },
+                    {
+                        "Credit Date": "2026-07-20",
+                        "Credit Number": "CN-OVERLAP",
+                        "Customer": "Customer B",
+                        "Product": "Product B",
+                        "Quantity": 1,
+                        "Sub Total": -20,
+                    },
+                ]
+            ).getvalue(),
+            entries["XF_Credit_2026-07-31.xlsx"],
+        )
+        new_snapshot = load_credit_snapshot_from_bytes(
+            _credit_workbook(
+                [
+                    {
+                        "Credit Date": "2026-07-20",
+                        "Credit Number": "CN-OVERLAP",
+                        "Customer": "Customer B",
+                        "Product": "Product B",
+                        "Quantity": 1,
+                        "Sub Total": -20,
+                    },
+                    {
+                        "Credit Date": "2026-08-02",
+                        "Credit Number": "CN-NEW",
+                        "Customer": "Customer C",
+                        "Product": "Product C",
+                        "Quantity": 1,
+                        "Sub Total": -30,
+                    },
+                ]
+            ).getvalue(),
+            entries["XF_Credit_2026-08-14.xlsx"],
+        )
+
+        merged = merge_credit_snapshots([old_snapshot, new_snapshot])
+
+        self.assertIsNotNone(merged)
+        assert merged is not None
+        self.assertEqual(3, len(merged.data))
+        self.assertEqual(60.0, merged.quality["Credit Amount"])
+        self.assertEqual(3, merged.quality["Credit Note Count"])
+        overlap = merged.data.loc[merged.data["Credit Number"].eq("CN-OVERLAP")]
+        self.assertEqual(1, len(overlap))
+        self.assertEqual("XF_Credit_2026-08-14.xlsx", overlap.iloc[0]["Source Snapshot File"])
+
+    def test_credit_snapshot_merge_preserves_same_file_identical_rows(self) -> None:
+        registry = build_credit_snapshot_registry(
+            [{"id": "new", "name": "XF_Credit_2026-08-14.xlsx", "modifiedTime": "2026-08-14T00:00:00Z"}]
+        )
+        entry = registry.valid_entries()[0]
+        snapshot = load_credit_snapshot_from_bytes(
+            _credit_workbook(
+                [
+                    {
+                        "Credit Date": "2026-08-02",
+                        "Credit Number": "CN-DUP",
+                        "Customer": "Customer A",
+                        "Product": "Product A",
+                        "Quantity": 1,
+                        "Sub Total": -15,
+                    },
+                    {
+                        "Credit Date": "2026-08-02",
+                        "Credit Number": "CN-DUP",
+                        "Customer": "Customer A",
+                        "Product": "Product A",
+                        "Quantity": 1,
+                        "Sub Total": -15,
+                    },
+                ]
+            ).getvalue(),
+            entry,
+        )
+
+        merged = merge_credit_snapshots([snapshot])
+
+        self.assertIsNotNone(merged)
+        assert merged is not None
+        self.assertEqual(2, len(merged.data))
+        self.assertEqual(30.0, merged.quality["Credit Amount"])
 
     def test_credit_file_imports_real_export_shape(self) -> None:
         result = import_credit_enquiry(

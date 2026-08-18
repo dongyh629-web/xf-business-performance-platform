@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import unittest
 import time
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 
 from app.cost_snapshots import CostSnapshot, CostSnapshotRegistry, CostSnapshotRegistryEntry
+from app.credit_notes import build_credit_snapshot_registry
 from app import google_drive
 from app.google_drive import DriveLoadItemStatus, DriveLoadStatus, DriveUserError
 
@@ -71,6 +73,14 @@ def _status(sales_status: str = "loaded") -> DriveLoadStatus:
         sales=DriveLoadItemStatus(sales_status, f"sales {sales_status}"),
         targets=DriveLoadItemStatus("using_previous", "目标失败，继续使用旧数据。"),
     )
+
+
+def _credit_workbook(rows: list[dict]) -> BytesIO:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame(rows).to_excel(writer, sheet_name="Sheet", index=False, startrow=2)
+    output.seek(0)
+    return output
 
 
 class DriveRefreshTransactionTests(unittest.TestCase):
@@ -229,6 +239,60 @@ class DriveRefreshTransactionTests(unittest.TestCase):
 
         self.assertEqual([snapshot], snapshots)
         self.assertEqual("2026-07-01", self.fake_st.session_state["drive_cost_version_dates"])
+
+    def test_credit_snapshot_loader_merges_all_drive_snapshots(self) -> None:
+        registry = build_credit_snapshot_registry(
+            [
+                {"id": "old", "name": "XF_Credit_2026-07-31.xlsx", "modifiedTime": "2026-07-31T00:00:00Z"},
+                {"id": "new", "name": "XF_Credit_2026-08-14.xlsx", "modifiedTime": "2026-08-14T00:00:00Z"},
+            ]
+        )
+        content_by_file_id = {
+            "old": _credit_workbook(
+                [
+                    {
+                        "Credit Date": "2026-07-15",
+                        "Credit Number": "CN-OLD",
+                        "Customer": "Customer A",
+                        "Product": "Product A",
+                        "Quantity": 1,
+                        "Sub Total": -10,
+                    }
+                ]
+            ),
+            "new": _credit_workbook(
+                [
+                    {
+                        "Credit Date": "2026-08-02",
+                        "Credit Number": "CN-NEW",
+                        "Customer": "Customer B",
+                        "Product": "Product B",
+                        "Quantity": 1,
+                        "Sub Total": -30,
+                    }
+                ]
+            ),
+        }
+
+        def download(_service, file_id: str):
+            content_by_file_id[file_id].seek(0)
+            return google_drive.BytesIO(content_by_file_id[file_id].getvalue())
+
+        with patch.object(google_drive, "get_drive_config", return_value=SimpleNamespace(folder_id="root")), patch.object(
+            google_drive, "get_drive_service", return_value=object()
+        ), patch.object(google_drive, "list_drive_credit_snapshot_candidates", return_value=registry), patch.object(
+            google_drive, "download_drive_file", side_effect=download
+        ), patch.object(
+            google_drive, "_write_credit_snapshot_cache"
+        ):
+            _registry, snapshot = google_drive.load_drive_credit_snapshot(force=True)
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(2, len(snapshot.data))
+        self.assertEqual(2, snapshot.quality["Credit Note Count"])
+        self.assertEqual(40.0, snapshot.quality["Credit Amount"])
+        self.assertEqual({"XF_Credit_2026-07-31.xlsx", "XF_Credit_2026-08-14.xlsx"}, set(snapshot.data["Source File"]))
 
 
 class DriveStartupLoadingTests(unittest.TestCase):
