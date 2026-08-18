@@ -23,6 +23,13 @@ from app.cost_snapshots import (
     build_cost_snapshot_registry,
     load_cost_snapshot_from_bytes,
 )
+from app.credit_notes import (
+    CreditFileMetadata,
+    CreditSnapshot,
+    CreditSnapshotRegistry,
+    build_credit_snapshot_registry,
+    load_credit_snapshot_from_bytes,
+)
 from app.data import ImportResult, import_excel
 from app.google_transport import GoogleHttpStatusError, close_google_service, google_auth_request, stage_timer, with_google_transport_retry
 from app.target_metrics import XFTargetWorkbook, parse_xf_target_workbook
@@ -40,6 +47,8 @@ SALES_FOLDER_NAMES = ("sales data", "sales")
 TARGETS_FOLDER_NAMES = ("targets data", "target data", "targets", "target")
 COST_FOLDER_NAMES = ("cost data", "costs data", "cost", "costs")
 COST_FOLDER_NAME = "Cost Data"
+CREDIT_FOLDER_NAMES = ("credit notes", "credits", "credit data", "returns credits")
+CREDIT_FOLDER_NAME = "Credit Notes"
 TARGET_FILE_FALLBACK_NAMES = ["XF 2026销售目标_Target may.xlsx"]
 EXCEL_EXTENSIONS = (".xlsx", ".xls")
 DRIVE_CACHE_VERSION = f"drive_cache_v4_{METHODOLOGY_VERSION}"
@@ -49,6 +58,7 @@ CACHE_SALES_PATH = CACHE_DIR / "sales_clean.parquet"
 CACHE_SALES_EXTRAS_PATH = CACHE_DIR / "sales_extras.pkl"
 CACHE_TARGETS_PATH = CACHE_DIR / "targets_clean.pkl"
 CACHE_COST_SNAPSHOTS_PATH = CACHE_DIR / "cost_snapshots.pkl"
+CACHE_CREDIT_SNAPSHOT_PATH = CACHE_DIR / "credit_snapshot.pkl"
 MERGED_SALES_FILE_NAME = "Google Drive 合并销售数据"
 SALES_REFRESH_CORE_KEYS = {
     "drive_auto_load_attempted",
@@ -66,7 +76,7 @@ SALES_REFRESH_CORE_KEYS = {
     "sales_drive_file_id",
     "sales_drive_modified_time",
 }
-REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_snapshot", "drive_target_", "target_")
+REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_snapshot", "drive_credit_", "credit_", "drive_target_", "target_")
 SUCCESSFUL_REFRESH_STATUSES = {"loaded", "cached", "unchanged"}
 REFRESH_TRANSACTION_TIMEOUT_SECONDS = 180
 REFRESH_STALE_LOCK_SECONDS = 120
@@ -854,6 +864,28 @@ def list_drive_cost_snapshot_candidates(service, root_folder_id: str) -> CostSna
     return registry
 
 
+def list_drive_credit_snapshot_candidates(service, root_folder_id: str) -> CreditSnapshotRegistry:
+    folder = find_drive_folder_from_aliases(service, root_folder_id, "Credit Notes", CREDIT_FOLDER_NAMES)
+    items = _list_drive_children(service, folder.file_id)
+    metadata = [
+        CreditFileMetadata(
+            file_id=str(item.get("id", "")),
+            name=str(item.get("name", "")),
+            modified_time=item.get("modifiedTime"),
+            size=item.get("size"),
+        )
+        for item in items
+        if _is_excel_file_name(str(item.get("name", "")))
+    ]
+    registry = build_credit_snapshot_registry(metadata)
+    logger.info(
+        "Google Drive credit snapshot candidates folder=%s files=%s",
+        CREDIT_FOLDER_NAME,
+        [entry.file_name for entry in registry.entries],
+    )
+    return registry
+
+
 def _sales_candidate_sort_key(candidate: DriveFileCandidate) -> tuple[pd.Timestamp, pd.Timestamp]:
     effective_date = candidate.filename_date
     if effective_date is None:
@@ -913,6 +945,24 @@ def _cost_manifest(registry: CostSnapshotRegistry) -> list[dict[str, Any]]:
 
 
 def _cost_manifest_signature(manifest: list[dict[str, Any]]) -> str:
+    payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _credit_manifest(registry: CreditSnapshotRegistry) -> list[dict[str, Any]]:
+    return [
+        {
+            "file_id": entry.file_id,
+            "name": entry.file_name,
+            "modified_time": entry.modified_time,
+            "size": entry.size,
+            "snapshot_date": _date_text(entry.snapshot_date),
+        }
+        for entry in registry.entries
+    ]
+
+
+def _credit_manifest_signature(manifest: list[dict[str, Any]]) -> str:
     payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1001,6 +1051,115 @@ def _write_cost_snapshot_cache(
         _perf_log("write_cost_snapshots", start, len(snapshots), "miss")
     except Exception:
         logger.exception("Local cost snapshot cache write failed")
+
+
+def _restore_credit_snapshot_cache(manifest_signature: str | None = None) -> tuple[CreditSnapshotRegistry, CreditSnapshot] | None:
+    start = _timer()
+    if not CACHE_CREDIT_SNAPSHOT_PATH.exists():
+        return None
+    try:
+        with CACHE_CREDIT_SNAPSHOT_PATH.open("rb") as handle:
+            payload = pickle.load(handle)
+        cache_signature = payload.get("manifest_signature")
+        if manifest_signature and cache_signature != manifest_signature:
+            return None
+        registry = payload.get("registry")
+        snapshot = payload.get("snapshot")
+        if not isinstance(registry, CreditSnapshotRegistry) or not isinstance(snapshot, CreditSnapshot):
+            return None
+        _perf_log("restore_credit_snapshot", start, len(snapshot.data), "hit")
+        return registry, snapshot
+    except Exception:
+        logger.exception("Local credit snapshot cache restore failed")
+        _perf_log("restore_credit_snapshot", start, cache="corrupt")
+        return None
+
+
+def _get_session_credit_snapshot() -> tuple[CreditSnapshotRegistry, CreditSnapshot] | None:
+    st = _get_streamlit()
+    registry = st.session_state.get("credit_snapshot_registry")
+    snapshot = st.session_state.get("credit_snapshot")
+    if isinstance(registry, CreditSnapshotRegistry) and isinstance(snapshot, CreditSnapshot):
+        return registry, snapshot
+    return None
+
+
+def _set_session_credit_snapshot(
+    registry: CreditSnapshotRegistry,
+    snapshot: CreditSnapshot | None,
+    status: str,
+    message: str,
+) -> None:
+    st = _get_streamlit()
+    st.session_state["credit_snapshot_registry"] = registry
+    if snapshot is not None:
+        st.session_state["credit_snapshot"] = snapshot
+        st.session_state["credit_data"] = snapshot.data
+        st.session_state["credit_quality"] = snapshot.quality
+        st.session_state["credit_source_name"] = snapshot.file_name
+        st.session_state["credit_sheet_name"] = "Google Drive Snapshot"
+        st.session_state["credit_raw_columns"] = list(snapshot.data.columns)
+        st.session_state["drive_credit_latest_snapshot"] = str(snapshot.snapshot_date.date())
+        st.session_state["drive_credit_file_name"] = snapshot.file_name
+        st.session_state["drive_credit_row_count"] = len(snapshot.data)
+        st.session_state["drive_credit_note_count"] = snapshot.quality.get("Credit Note Count", 0)
+        dates = pd.to_datetime(snapshot.data.get("Credit Date"), errors="coerce").dropna()
+        st.session_state["drive_credit_date_range"] = "无" if dates.empty else f"{dates.min().date()} 至 {dates.max().date()}"
+    else:
+        st.session_state.pop("credit_snapshot", None)
+        st.session_state.pop("credit_data", None)
+        st.session_state.pop("credit_quality", None)
+        st.session_state["drive_credit_latest_snapshot"] = "无"
+        st.session_state["drive_credit_file_name"] = "无"
+        st.session_state["drive_credit_row_count"] = 0
+        st.session_state["drive_credit_note_count"] = 0
+        st.session_state["drive_credit_date_range"] = "无"
+    st.session_state["drive_credit_status"] = status
+    st.session_state["drive_credit_message"] = message
+    st.session_state["drive_credit_registry_count"] = len(registry.entries)
+    st.session_state["drive_credit_snapshot_count"] = len(registry.valid_entries())
+    st.session_state["drive_credit_candidates"] = [entry.file_name for entry in registry.entries[:10]]
+    st.session_state["drive_credit_loaded_at"] = _now_text()
+    st.session_state["drive_credit_load_status"] = DriveLoadItemStatus(status, message)
+
+
+def _write_credit_snapshot_cache(
+    registry: CreditSnapshotRegistry,
+    snapshot: CreditSnapshot,
+    manifest: list[dict[str, Any]],
+    manifest_signature: str,
+) -> None:
+    start = _timer()
+    try:
+        _ensure_cache_dir()
+        with CACHE_CREDIT_SNAPSHOT_PATH.open("wb") as handle:
+            pickle.dump(
+                {
+                    "registry": registry,
+                    "snapshot": snapshot,
+                    "manifest": manifest,
+                    "manifest_signature": manifest_signature,
+                    "cache_created_at": _now_text(),
+                },
+                handle,
+            )
+        cache_metadata = _read_cache_metadata()
+        cache_metadata.update(
+            {
+                "cache_version": DRIVE_CACHE_VERSION,
+                "credit_manifest": manifest,
+                "credit_manifest_signature": manifest_signature,
+                "credit_snapshot_file_name": snapshot.file_name,
+                "credit_snapshot_date": str(snapshot.snapshot_date.date()),
+                "credit_rows": len(snapshot.data),
+                "credit_note_count": snapshot.quality.get("Credit Note Count", 0),
+                "credit_cache_created_at": _now_text(),
+            }
+        )
+        _write_cache_metadata(cache_metadata)
+        _perf_log("write_credit_snapshot", start, len(snapshot.data), "miss")
+    except Exception:
+        logger.exception("Local credit snapshot cache write failed")
 
 
 def _non_empty_count(series: pd.Series) -> int:
@@ -1804,6 +1963,103 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
     return registry, snapshots
 
 
+def load_drive_credit_snapshot(force: bool = False) -> tuple[CreditSnapshotRegistry, CreditSnapshot | None]:
+    start = _timer()
+    session_credit = _get_session_credit_snapshot()
+    if not force and session_credit is not None:
+        registry, snapshot = session_credit
+        _perf_log("load_drive_credit_snapshot", start, len(snapshot.data), "session")
+        return registry, snapshot
+    if not force:
+        cached = _restore_credit_snapshot_cache()
+        if cached is not None:
+            _set_session_credit_snapshot(cached[0], cached[1], "cached", "Credit Notes 已从本地缓存加载。")
+            _perf_log("load_drive_credit_snapshot", start, len(cached[1].data), "local-cache")
+            return cached
+        registry = CreditSnapshotRegistry([])
+        _set_session_credit_snapshot(registry, None, "not_loaded", "尚未加载 Credit Notes。请点击 Refresh Credit Notes。")
+        _perf_log("load_drive_credit_snapshot", start, 0, "not-loaded")
+        return registry, None
+
+    try:
+        config = get_drive_config()
+        with stage_timer("credit_snapshot_load") as done:
+            service = get_drive_service(config)
+            try:
+                registry = list_drive_credit_snapshot_candidates(service, config.folder_id)
+                done(rows=len(registry.entries), status="registry")
+            finally:
+                close_google_service(service)
+    except DriveUserError as exc:
+        if session_credit is not None:
+            registry, snapshot = session_credit
+            _set_session_credit_snapshot(
+                registry,
+                snapshot,
+                "using_previous",
+                f"Credit Notes 刷新失败，当前继续使用上一次成功数据。失败原因：{exc}",
+            )
+            return registry, snapshot
+        raise
+
+    manifest = _credit_manifest(registry)
+    manifest_signature = _credit_manifest_signature(manifest)
+    if not force:
+        cached = _restore_credit_snapshot_cache(manifest_signature)
+        if cached is not None:
+            _set_session_credit_snapshot(cached[0], cached[1], "cached", "Credit Notes 已从本地缓存加载。")
+            return cached
+
+    valid_entries = sorted(registry.valid_entries(), key=lambda entry: entry.snapshot_date or pd.Timestamp.min, reverse=True)
+    if not valid_entries:
+        if session_credit is not None:
+            registry, snapshot = session_credit
+            _set_session_credit_snapshot(registry, snapshot, "using_previous", "Drive 中未找到有效 Credit Snapshot，当前继续使用上一次成功数据。")
+            return registry, snapshot
+        _set_session_credit_snapshot(registry, None, "not_loaded", "Drive 中未找到有效 Credit Snapshot。")
+        return registry, None
+
+    selected_entry = valid_entries[0]
+    snapshot: CreditSnapshot | None = None
+    service = get_drive_service(config)
+    try:
+        with stage_timer("credit_snapshot_load") as done:
+            try:
+                snapshot_start = _timer()
+                logger.info("credit_download_started file_name=%s", selected_entry.file_name)
+                content = download_drive_file(service, str(selected_entry.file_id)).getvalue()
+                logger.info("credit_download_completed file_name=%s elapsed_seconds=%.3f bytes=%s", selected_entry.file_name, _elapsed_seconds(snapshot_start), len(content))
+                parse_start = _timer()
+                logger.info("credit_parse_started file_name=%s", selected_entry.file_name)
+                snapshot = load_credit_snapshot_from_bytes(content, selected_entry)
+                logger.info("credit_parse_completed file_name=%s elapsed_seconds=%.3f rows=%s", selected_entry.file_name, _elapsed_seconds(parse_start), len(snapshot.data))
+            except Exception as exc:
+                selected_entry.validation_status = "Invalid"
+                selected_entry.errors.append(f"Snapshot parse failed: {exc.__class__.__name__}")
+                selected_entry.participates_in_matching = False
+                logger.warning("Google Drive credit snapshot rejected file_name=%s reason=%s", selected_entry.file_name, exc.__class__.__name__)
+            done(rows=len(snapshot.data) if snapshot is not None else 0, status="loaded" if snapshot is not None else "failed")
+    finally:
+        close_google_service(service)
+
+    manifest = _credit_manifest(registry)
+    manifest_signature = _credit_manifest_signature(manifest)
+    if snapshot is None:
+        if session_credit is not None:
+            previous_registry, previous_snapshot = session_credit
+            _set_session_credit_snapshot(previous_registry, previous_snapshot, "using_previous", "Drive 中未找到有效 Credit Snapshot，当前继续使用上一次成功数据。")
+            _perf_log("load_drive_credit_snapshot", start, len(previous_snapshot.data), "drive-failed-previous")
+            return previous_registry, previous_snapshot
+        _set_session_credit_snapshot(registry, None, "failed", "Credit Snapshot 读取失败。")
+        _perf_log("load_drive_credit_snapshot", start, 0, "drive-failed")
+        return registry, None
+
+    _write_credit_snapshot_cache(registry, snapshot, manifest, manifest_signature)
+    _set_session_credit_snapshot(registry, snapshot, "loaded", "Credit Notes 已从 Google Drive 加载。")
+    _perf_log("load_drive_credit_snapshot", start, len(snapshot.data), "drive")
+    return registry, snapshot
+
+
 def ensure_drive_data_loaded(force: bool = False) -> DriveLoadStatus:
     st = _get_streamlit()
     if not force:
@@ -1858,6 +2114,38 @@ def _successful_cost_refresh(snapshots: list[CostSnapshot]) -> bool:
     st = _get_streamlit()
     status = st.session_state.get("drive_cost_load_status")
     return _successful_item_status(status) and bool(snapshots)
+
+
+def refresh_credit_notes_transaction() -> tuple[CreditSnapshot | None, str]:
+    refresh_start = _timer()
+    logger.info("credit_refresh_transaction_started")
+    previous_state = _snapshot_refresh_state()
+    try:
+        registry, snapshot = load_drive_credit_snapshot(force=True)
+        _raise_if_refresh_deadline_expired(refresh_start, "credit_snapshot_load")
+    except DriveUserError as exc:
+        _restore_refresh_state(previous_state)
+        logger.warning(
+            "credit_refresh_transaction_failed stage=credit_snapshot_load elapsed_seconds=%.3f error_type=%s",
+            _elapsed_seconds(refresh_start),
+            exc.__class__.__name__,
+        )
+        return None, f"Credit Notes 刷新失败，当前继续使用旧数据。失败原因：{exc}"
+    if snapshot is None:
+        _restore_refresh_state(previous_state)
+        message = _get_streamlit().session_state.get("drive_credit_message") or "未找到有效 Credit Snapshot。"
+        logger.warning(
+            "credit_refresh_transaction_failed stage=credit_validation elapsed_seconds=%.3f error_type=CreditRefreshIncomplete",
+            _elapsed_seconds(refresh_start),
+        )
+        return None, f"Credit Notes 刷新未完成，当前继续使用旧数据。{message}"
+    logger.info(
+        "credit_refresh_transaction_completed elapsed_seconds=%.3f rows=%s snapshot=%s",
+        _elapsed_seconds(refresh_start),
+        len(snapshot.data),
+        snapshot.file_name,
+    )
+    return snapshot, f"Credit Notes 已刷新：{snapshot.file_name}"
 
 
 def refresh_drive_data_transaction() -> tuple[DriveLoadStatus | None, str]:
@@ -2120,6 +2408,18 @@ def render_data_source_sidebar(show_uploaders: bool = False):
             if st.session_state.get("drive_cost_message"):
                 st.caption(f"说明：{st.session_state['drive_cost_message']}")
 
+            st.markdown("**Credit Notes**")
+            st.caption(f"状态：{st.session_state.get('drive_credit_status') or '未加载'}")
+            st.caption(f"最新快照：{st.session_state.get('drive_credit_latest_snapshot') or '无'}")
+            st.caption(f"当前文件名：{st.session_state.get('drive_credit_file_name') or '无'}")
+            st.caption(f"Registry 行数：{st.session_state.get('drive_credit_registry_count', '无')}")
+            st.caption(f"数据行数：{st.session_state.get('drive_credit_row_count', '无')}")
+            st.caption(f"退款单数：{st.session_state.get('drive_credit_note_count', '无')}")
+            st.caption(f"日期范围：{st.session_state.get('drive_credit_date_range') or '无'}")
+            st.caption(f"Dashboard 加载时间：{st.session_state.get('drive_credit_loaded_at') or '无'}")
+            if st.session_state.get("drive_credit_message"):
+                st.caption(f"说明：{st.session_state['drive_credit_message']}")
+
         if can_use_data_sync:
             with st.expander("数据同步", expanded=False):
                 if st.button("刷新 Google Drive 数据", use_container_width=True):
@@ -2130,6 +2430,15 @@ def render_data_source_sidebar(show_uploaders: bool = False):
                     st.rerun()
                 if st.session_state.get("drive_refresh_message"):
                     st.caption(st.session_state["drive_refresh_message"])
+
+                if st.button("Refresh Credit Notes", use_container_width=True):
+                    with st.spinner("正在重新加载 Credit Notes..."):
+                        _snapshot, message = refresh_credit_notes_transaction()
+                    if message:
+                        st.session_state["drive_credit_refresh_message"] = message
+                    st.rerun()
+                if st.session_state.get("drive_credit_refresh_message"):
+                    st.caption(st.session_state["drive_credit_refresh_message"])
 
                 if show_uploaders:
                     st.markdown("**手动上传销售数据**")

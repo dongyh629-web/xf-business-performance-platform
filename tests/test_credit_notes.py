@@ -14,6 +14,7 @@ from app.credit_metrics import (
     sales_for_credit_period,
 )
 from app.credit_notes import UNKNOWN_REASON, import_credit_enquiry
+from app.credit_notes import build_credit_snapshot_registry, parse_credit_snapshot_date_from_filename
 
 
 def _credit_workbook(rows: list[dict], header_offset: int = 2) -> BytesIO:
@@ -31,6 +32,22 @@ def _credit_workbook(rows: list[dict], header_offset: int = 2) -> BytesIO:
 
 
 class CreditNotesTest(unittest.TestCase):
+    def test_credit_snapshot_filename_registry(self) -> None:
+        self.assertEqual(pd.Timestamp("2026-08-14"), parse_credit_snapshot_date_from_filename("XF_Credit_2026-08-14.xlsx"))
+        self.assertIsNone(parse_credit_snapshot_date_from_filename("CreditEnquiryList.xlsx"))
+
+        registry = build_credit_snapshot_registry(
+            [
+                {"id": "1", "name": "XF_Credit_2026-07-31.xlsx", "modifiedTime": "2026-08-01T00:00:00Z"},
+                {"id": "2", "name": "XF_Credit_2026-08-14.xlsx", "modifiedTime": "2026-08-15T00:00:00Z"},
+                {"id": "3", "name": "~$XF_Credit_2026-08-14.xlsx", "modifiedTime": "2026-08-15T00:00:00Z"},
+                {"id": "4", "name": "CreditEnquiryList.xlsx", "modifiedTime": "2026-08-15T00:00:00Z"},
+            ]
+        )
+
+        self.assertEqual(["XF_Credit_2026-08-14.xlsx", "XF_Credit_2026-07-31.xlsx", "CreditEnquiryList.xlsx"], [entry.file_name for entry in registry.entries])
+        self.assertEqual(["XF_Credit_2026-08-14.xlsx", "XF_Credit_2026-07-31.xlsx"], [entry.file_name for entry in registry.valid_entries()])
+
     def test_credit_file_imports_real_export_shape(self) -> None:
         result = import_credit_enquiry(
             _credit_workbook(

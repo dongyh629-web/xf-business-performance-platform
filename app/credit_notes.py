@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 import pandas as pd
@@ -10,6 +11,7 @@ import pandas as pd
 CREDIT_SAMPLE_PATH = Path.home() / "Downloads" / "CreditEnquiryList.xlsx"
 CREDIT_FOLDER_NAMES = ("credit notes", "credits", "credit data", "returns credits")
 CREDIT_FILE_PATTERN = "XF_Credit_YYYY-MM-DD.xlsx"
+CREDIT_FILE_NAME_RE = re.compile(r"^XF_Credit_(20\d{2}-\d{2}-\d{2})\.xlsx$")
 UNKNOWN_REASON = "Unknown / 未知"
 
 REQUIRED_HEADER_FIELDS = {"Credit Date", "Credit Number", "Customer", "Sub Total"}
@@ -39,10 +41,98 @@ class CreditImportResult:
     source_name: str
 
 
+@dataclass(frozen=True)
+class CreditFileMetadata:
+    file_id: str
+    name: str
+    modified_time: str | None
+    size: str | None = None
+
+
+@dataclass
+class CreditSnapshotRegistryEntry:
+    snapshot_date: pd.Timestamp | None
+    file_name: str
+    file_id: str
+    modified_time: str | None
+    size: str | None = None
+    row_count: int = 0
+    credit_note_count: int = 0
+    credit_amount: float = 0.0
+    date_min: str | None = None
+    date_max: str | None = None
+    validation_status: str = "Pending"
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    participates_in_matching: bool = True
+
+
+@dataclass
+class CreditSnapshotRegistry:
+    entries: list[CreditSnapshotRegistryEntry]
+
+    def valid_entries(self) -> list[CreditSnapshotRegistryEntry]:
+        return [entry for entry in self.entries if entry.participates_in_matching and entry.snapshot_date is not None]
+
+
+@dataclass(frozen=True)
+class CreditSnapshot:
+    snapshot_date: pd.Timestamp
+    file_name: str
+    data: pd.DataFrame
+    quality: dict[str, int | float | str]
+    registry_entry: CreditSnapshotRegistryEntry
+
+
 def _normalized_text(value: object) -> str:
     if pd.isna(value):
         return ""
     return str(value).replace("\n", " ").strip()
+
+
+def parse_credit_snapshot_date_from_filename(file_name: str) -> pd.Timestamp | None:
+    match = CREDIT_FILE_NAME_RE.match(str(file_name).strip())
+    if not match:
+        return None
+    parsed = pd.to_datetime(match.group(1), errors="coerce")
+    return None if pd.isna(parsed) else pd.Timestamp(parsed).normalize()
+
+
+def build_credit_snapshot_registry(items: Iterable[Any]) -> CreditSnapshotRegistry:
+    entries: list[CreditSnapshotRegistryEntry] = []
+    for item in items:
+        name = str(getattr(item, "name", "") if not isinstance(item, dict) else item.get("name", ""))
+        if not name or name.startswith(".") or name.startswith("~$"):
+            continue
+        file_id = str(getattr(item, "file_id", "") if not isinstance(item, dict) else item.get("file_id", item.get("id", "")))
+        modified_time = getattr(item, "modified_time", None) if not isinstance(item, dict) else item.get("modified_time") or item.get("modifiedTime")
+        size = getattr(item, "size", None) if not isinstance(item, dict) else item.get("size")
+        snapshot_date = parse_credit_snapshot_date_from_filename(name)
+        entry = CreditSnapshotRegistryEntry(
+            snapshot_date=snapshot_date,
+            file_name=name,
+            file_id=file_id,
+            modified_time=modified_time,
+            size=size,
+        )
+        if snapshot_date is None:
+            entry.validation_status = "Ignored"
+            entry.participates_in_matching = False
+            entry.warnings.append("File name does not match XF_Credit_YYYY-MM-DD.xlsx")
+        entries.append(entry)
+
+    date_counts: dict[pd.Timestamp, int] = {}
+    for entry in entries:
+        if entry.snapshot_date is not None:
+            date_counts[entry.snapshot_date] = date_counts.get(entry.snapshot_date, 0) + 1
+    for entry in entries:
+        if entry.snapshot_date is not None and date_counts.get(entry.snapshot_date, 0) > 1:
+            entry.validation_status = "Conflict"
+            entry.participates_in_matching = False
+            entry.errors.append("Multiple credit files share the same Snapshot Date")
+
+    entries.sort(key=lambda item: (item.snapshot_date is not None, item.snapshot_date or pd.Timestamp.min), reverse=True)
+    return CreditSnapshotRegistry(entries=entries)
 
 
 def _first_existing(columns: Iterable[object], candidates: list[str]) -> str | None:
@@ -177,6 +267,48 @@ def import_credit_enquiry(excel_file, source_name: str | None = None) -> CreditI
     clean = normalize_credit_notes(raw, source_name or getattr(excel_file, "name", "") or "CreditEnquiryList.xlsx")
     quality = validate_credit_notes(clean)
     return CreditImportResult(raw=raw, clean=clean, quality=quality, sheet_name=sheet_name, source_name=source_name or getattr(excel_file, "name", "") or "CreditEnquiryList.xlsx")
+
+
+def load_credit_snapshot_from_bytes(content: bytes, entry: CreditSnapshotRegistryEntry) -> CreditSnapshot:
+    if entry.snapshot_date is None:
+        raise ValueError("Credit registry entry does not have a snapshot date.")
+    from io import BytesIO
+
+    result = import_credit_enquiry(BytesIO(content), entry.file_name)
+    clean = result.clean
+    quality = result.quality
+    entry.row_count = int(len(clean))
+    entry.credit_note_count = int(quality.get("Credit Note Count", 0))
+    entry.credit_amount = float(quality.get("Credit Amount", 0.0))
+    dates = pd.to_datetime(clean.get("Credit Date"), errors="coerce").dropna()
+    entry.date_min = None if dates.empty else str(dates.min().date())
+    entry.date_max = None if dates.empty else str(dates.max().date())
+    entry.validation_status = "Valid"
+    if int(quality.get("Missing Customer", 0)):
+        entry.warnings.append(f"Missing Customer rows: {quality['Missing Customer']}")
+    if int(quality.get("Missing Product", 0)):
+        entry.warnings.append(f"Missing Product rows: {quality['Missing Product']}")
+    if int(quality.get("Unknown Reason", 0)):
+        entry.warnings.append(f"Unknown Reason rows: {quality['Unknown Reason']}")
+    if clean.empty:
+        entry.validation_status = "Invalid"
+        entry.errors.append("Credit snapshot worksheet is empty")
+        entry.participates_in_matching = False
+    if dates.empty:
+        entry.validation_status = "Invalid"
+        entry.errors.append("Credit snapshot has no valid Credit Date")
+        entry.participates_in_matching = False
+    if "Credit Number" not in clean.columns or clean["Credit Number"].dropna().empty:
+        entry.validation_status = "Invalid"
+        entry.errors.append("Credit snapshot has no valid Credit Number")
+        entry.participates_in_matching = False
+    return CreditSnapshot(
+        snapshot_date=entry.snapshot_date,
+        file_name=entry.file_name,
+        data=clean,
+        quality=quality,
+        registry_entry=entry,
+    )
 
 
 def filter_credit_by_date(data: pd.DataFrame, start_date, end_date) -> pd.DataFrame:

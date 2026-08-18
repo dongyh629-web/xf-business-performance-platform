@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from io import BytesIO
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -16,8 +14,8 @@ from app.credit_metrics import (
     monthly_credit_trend,
     sales_for_credit_period,
 )
-from app.credit_notes import CREDIT_FILE_PATTERN, CREDIT_SAMPLE_PATH, filter_credit_by_date, import_credit_enquiry
-from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
+from app.credit_notes import CREDIT_FILE_PATTERN, filter_credit_by_date
+from app.google_drive import ensure_drive_data_loaded, load_drive_credit_snapshot, render_drive_data_load_prompt, render_data_source_sidebar
 from app.ui import inject_global_styles, money, percent, render_date_range_inputs, section_header, style_plotly
 
 
@@ -73,26 +71,6 @@ def _render_kpis(kpis: dict[str, float | int | None]) -> None:
             "</div>"
         )
     st.markdown(f'<div class="xf-profit-kpi-grid">{"".join(html)}</div>', unsafe_allow_html=True)
-
-
-def _load_credit_file(uploaded_file) -> None:
-    bytes_data = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
-    result = import_credit_enquiry(BytesIO(bytes_data), getattr(uploaded_file, "name", "CreditEnquiryList.xlsx"))
-    st.session_state["credit_data"] = result.clean
-    st.session_state["credit_quality"] = result.quality
-    st.session_state["credit_source_name"] = result.source_name
-    st.session_state["credit_sheet_name"] = result.sheet_name
-    st.session_state["credit_raw_columns"] = list(result.raw.columns)
-
-
-def _load_local_sample() -> None:
-    with CREDIT_SAMPLE_PATH.open("rb") as handle:
-        result = import_credit_enquiry(BytesIO(handle.read()), CREDIT_SAMPLE_PATH.name)
-    st.session_state["credit_data"] = result.clean
-    st.session_state["credit_quality"] = result.quality
-    st.session_state["credit_source_name"] = result.source_name
-    st.session_state["credit_sheet_name"] = result.sheet_name
-    st.session_state["credit_raw_columns"] = list(result.raw.columns)
 
 
 def _credit_amount_style(value: object) -> str:
@@ -209,6 +187,23 @@ def _line_chart(data: pd.DataFrame, title: str):
     return style_plotly(fig)
 
 
+def _render_credit_data_source() -> None:
+    quality = st.session_state.get("credit_quality") or {}
+    rows = st.session_state.get("drive_credit_row_count", quality.get("Rows", 0))
+    credit_notes = st.session_state.get("drive_credit_note_count", quality.get("Credit Note Count", 0))
+    date_range = st.session_state.get("drive_credit_date_range") or "无"
+    last_refresh = st.session_state.get("drive_credit_loaded_at") or "无"
+    latest_snapshot = st.session_state.get("drive_credit_file_name") or st.session_state.get("drive_credit_latest_snapshot") or "无"
+    cols = st.columns(5)
+    cols[0].metric("Latest Snapshot / 最新快照", latest_snapshot)
+    cols[1].metric("Rows / 行数", _number(rows))
+    cols[2].metric("Credit Notes / 退款单数", _number(credit_notes))
+    cols[3].metric("Date Range / 日期范围", date_range)
+    cols[4].metric("Last Refresh / 最近刷新", last_refresh)
+    if st.session_state.get("drive_credit_message"):
+        st.caption(st.session_state["drive_credit_message"])
+
+
 inject_global_styles()
 require_login("returns")
 drive_status = ensure_drive_data_loaded()
@@ -224,26 +219,12 @@ if sales_df is None:
 
 _render_header()
 
-with st.expander("Credit 数据导入 / Credit Data Import", expanded=st.session_state.get("credit_data") is None):
-    st.caption(f"第一版支持 CreditEnquiryList.xlsx 上传；后续可接入 Google Drive: Credit Notes / {CREDIT_FILE_PATTERN}.")
-    uploaded_credit = st.file_uploader("上传 CreditEnquiryList.xlsx", type=["xlsx"], key="credit_enquiry_upload")
-    if uploaded_credit is not None:
-        try:
-            _load_credit_file(uploaded_credit)
-            st.success(f"Credit 数据已读取：{uploaded_credit.name}")
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Credit 文件读取失败：{exc}")
-    if CREDIT_SAMPLE_PATH.exists():
-        if st.button("读取本地样本 CreditEnquiryList.xlsx", use_container_width=True):
-            try:
-                _load_local_sample()
-                st.success("本地 Credit 样本已读取。")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"本地 Credit 样本读取失败：{exc}")
-    if st.session_state.get("credit_source_name"):
-        st.caption(f"当前 Credit 来源：{st.session_state['credit_source_name']} | Sheet：{st.session_state.get('credit_sheet_name', '')}")
+_registry, _snapshot = load_drive_credit_snapshot(force=False)
+
+section_header("Credit Data Source / Credit 数据来源")
+_render_credit_data_source()
+if _snapshot is None:
+    st.info(f"尚未加载 Credit Notes。请在左侧数据同步中点击 Refresh Credit Notes。文件命名规则：{CREDIT_FILE_PATTERN}")
 
 credit_df = st.session_state.get("credit_data")
 if credit_df is None:
