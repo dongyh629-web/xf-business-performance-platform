@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import unittest
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
 
+from app.cost_snapshots import CostSnapshot, CostSnapshotRegistry, CostSnapshotRegistryEntry
 from app import google_drive
 from app.google_drive import DriveLoadItemStatus, DriveLoadStatus, DriveUserError
 
@@ -197,6 +199,36 @@ class DriveRefreshTransactionTests(unittest.TestCase):
         with self.assertRaises(DriveUserError):
             google_drive._run_blocking_stage("sales_parse", 0.05, lambda: time.sleep(1))
         self.assertLess(time.perf_counter() - started, 0.8)
+
+    def test_cost_snapshot_summary_uses_version_date(self) -> None:
+        entry = CostSnapshotRegistryEntry(
+            cost_version_date=pd.Timestamp("2026-07-01"),
+            file_name="XF_Product_Cost_2026-07-01.xlsx",
+            file_id="cost-file",
+            modified_time="2026-07-01T00:00:00Z",
+            participates_in_matching=True,
+        )
+        registry = CostSnapshotRegistry([entry])
+        snapshot = CostSnapshot(
+            version_date=pd.Timestamp("2026-07-01"),
+            file_name=entry.file_name,
+            file_id=entry.file_id,
+            modified_time=entry.modified_time,
+            data=pd.DataFrame({"Product Code": ["A"], "Unit Cost": [1.0]}),
+            registry_entry=entry,
+        )
+
+        with patch.object(google_drive, "get_drive_config", return_value=SimpleNamespace(folder_id="root")), patch.object(
+            google_drive, "get_drive_service", return_value=object()
+        ), patch.object(google_drive, "list_drive_cost_snapshot_candidates", return_value=registry), patch.object(
+            google_drive, "download_drive_file", return_value=google_drive.BytesIO(b"cost")
+        ), patch.object(google_drive, "load_cost_snapshot_from_bytes", return_value=snapshot), patch.object(
+            google_drive, "_write_cost_snapshot_cache"
+        ):
+            _registry, snapshots = google_drive.load_drive_cost_snapshots(force=True)
+
+        self.assertEqual([snapshot], snapshots)
+        self.assertEqual("2026-07-01", self.fake_st.session_state["drive_cost_version_dates"])
 
 
 class DriveStartupLoadingTests(unittest.TestCase):

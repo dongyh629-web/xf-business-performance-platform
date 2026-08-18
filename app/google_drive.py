@@ -2109,7 +2109,7 @@ def load_drive_cost_snapshots(force: bool = False) -> tuple[CostSnapshotRegistry
         "cost_loaded_summary snapshots=%s rows=%s versions=%s source_files=%s",
         len(snapshots),
         sum(len(snapshot.data) for snapshot in snapshots),
-        [str(snapshot.snapshot_date.date()) for snapshot in snapshots],
+        [str(snapshot.version_date.date()) for snapshot in snapshots],
         [snapshot.file_name for snapshot in snapshots],
     )
     _perf_log("load_drive_cost_snapshots", start, len(snapshots), "drive")
