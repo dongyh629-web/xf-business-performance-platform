@@ -3,6 +3,7 @@ import plotly.express as px
 import streamlit as st
 
 from app.auth import require_login
+from app.credit_context import scoped_credit_kpis, scoped_product_credits, scoped_product_group_credits
 from app.data import monthly_sales, top_entity_table, top_table
 from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.ui import bar_chart, inject_global_styles, line_chart, money, percent, metric_row, section_header, show_code_warning, show_context_summary, show_filters, style_plotly
@@ -68,6 +69,32 @@ def _yoy_cell_style(value):
     return "color: #166534; font-weight: 600;" if number >= 0 else "color: #b91c1c; font-weight: 600;"
 
 
+def _money_or_zero(value: object) -> str:
+    if value is None or pd.isna(value):
+        return money(0)
+    return money(float(value))
+
+
+def _percent_or_na(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return percent(float(value))
+
+
+def _format_credit_table(table: pd.DataFrame) -> pd.DataFrame:
+    if table.empty:
+        return table
+    display = table.copy()
+    for column in ["Gross Sales", "Credit", "Net Sales"]:
+        if column in display.columns:
+            display[column] = display[column].map(_money_or_zero)
+    if "Credit Rate" in display.columns:
+        display["Credit Rate"] = display["Credit Rate"].map(_percent_or_na)
+    if "Credit Quantity" in display.columns:
+        display["Credit Quantity"] = display["Credit Quantity"].map(lambda value: f"{float(value):,.0f}" if pd.notna(value) else "0")
+    return display
+
+
 def _group_trend_chart(trend, selected_groups):
     plot = trend[trend["产品系列"].isin(selected_groups)].copy()
     fig = px.line(plot, x="月份", y="Sales Amount", color="产品系列", markers=True, title="产品系列月度销售趋势")
@@ -94,6 +121,17 @@ filtered = show_filters(df, "products")
 show_code_warning(filtered)
 show_context_summary(filtered)
 metric_row(filtered)
+
+credit_kpis = scoped_credit_kpis(filtered)
+section_header("Credit Impact / 退款影响")
+credit_cols = st.columns(4)
+credit_cols[0].metric("Gross Sales / 销售额", money(float(credit_kpis.get("Gross Sales") or 0.0)))
+credit_cols[1].metric("Credit / 退款", money(float(credit_kpis.get("Credit Amount") or 0.0)))
+credit_cols[2].metric("Net Sales / 调整后销售额", money(float(credit_kpis.get("Net Sales") or 0.0)))
+credit_cols[3].metric("Credit Rate / 退款率", _percent_or_na(credit_kpis.get("Credit Rate")))
+
+product_credit_table = scoped_product_credits(filtered)
+group_credit_table = scoped_product_group_credits(filtered)
 
 section_header("产品系列趋势", "Product Group Trend")
 group_trend = _product_group_monthly_trend(filtered)
@@ -132,6 +170,18 @@ with right:
     else:
         top_products = top_table(filtered, "Product", 20)
         st.plotly_chart(bar_chart(top_products.sort_values("Sales Amount"), "Sales Amount", "Product", "Top Product", "h"), width="stretch")
+
+section_header("Top Returned Products / 退款产品")
+product_credit_tabs = st.tabs(["Top Returned Products / 退款金额最高", "Highest Credit Rate / 高退款率产品", "Product Group Credit / 产品系列退款"])
+with product_credit_tabs[0]:
+    columns = ["Product Code", "Product", "Product Group", "Gross Sales", "Credit", "Net Sales", "Credit Rate", "Credit Quantity", "Credit Note Count"]
+    st.dataframe(_format_credit_table(product_credit_table[[column for column in columns if column in product_credit_table.columns]].head(30)), use_container_width=True, hide_index=True)
+with product_credit_tabs[1]:
+    high_rate = product_credit_table[product_credit_table["Gross Sales"].gt(0)].sort_values("Credit Rate", ascending=False).head(30) if not product_credit_table.empty else product_credit_table
+    st.dataframe(_format_credit_table(high_rate[[column for column in columns if column in high_rate.columns]]), use_container_width=True, hide_index=True)
+with product_credit_tabs[2]:
+    group_columns = ["Product Group", "Gross Sales", "Credit", "Net Sales", "Credit Rate", "Credit Quantity", "Credit Note Count"]
+    st.dataframe(_format_credit_table(group_credit_table[[column for column in group_columns if column in group_credit_table.columns]].head(30)), use_container_width=True, hide_index=True)
 
 section_header("单产品趋势")
 product_dimension = "Product Key" if "Product Key" in filtered.columns else "Product"

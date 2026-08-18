@@ -5,6 +5,7 @@ import streamlit as st
 
 from app.auth import require_login
 from app import config as app_config
+from app.credit_context import scoped_customer_credits
 from app.customer_health import (
     NEW_CUSTOMER_START_DATE,
     PRIORITY_ORDER,
@@ -49,6 +50,12 @@ def _format_score(value) -> str:
     if pd.isna(value):
         return "历史不足"
     return f"{float(value):.2f}"
+
+
+def _format_credit_rate(value) -> str:
+    if pd.isna(value):
+        return "N/A"
+    return percent(float(value))
 
 
 def _csv_bytes(df: pd.DataFrame) -> bytes:
@@ -236,6 +243,15 @@ history = _history_scope(df, filtered)
 history_dates = pd.to_datetime(history["Performance Date"], errors="coerce").dt.normalize()
 history = history[history_dates.le(anchor)].copy()
 result = build_customer_health(history, history)
+customer_credit_table = scoped_customer_credits(filtered)
+high_credit_risk = (
+    customer_credit_table[
+        customer_credit_table["Gross Sales"].gt(0)
+        & customer_credit_table["Credit Rate"].fillna(0).ge(0.10)
+    ].copy()
+    if not customer_credit_table.empty and {"Gross Sales", "Credit Rate"}.issubset(customer_credit_table.columns)
+    else pd.DataFrame()
+)
 
 basis = filtered.attrs.get("date_basis", st.session_state.get("date_basis", "Completed Date"))
 basis_labels = getattr(app_config, "DATE_BASIS_LABELS", {})
@@ -289,9 +305,10 @@ kpi_grid(
         {"label": "当月活跃客户", "value": f"{active.current_active:,}", "delta": _format_percent(active.mom), "caption": "环比变化"},
         {"label": "今日可跟进客户", "value": f"{len(result.follow_up):,}", "caption": "近期异常且可挽回"},
         {"label": "高风险客户", "value": f"{high_risk_count:,}", "caption": "优先联系"},
+        {"label": "High Credit Risk", "value": f"{len(high_credit_risk):,}", "caption": "退款率 ≥ 10%，不影响健康评分"},
         {"label": "近期改善客户", "value": f"{len(result.improving_customers):,}", "caption": "恢复或改善"},
     ],
-    columns=4,
+    columns=5,
 )
 kpi_grid(
     [
@@ -306,6 +323,32 @@ kpi_grid(
     ],
     columns=4,
 )
+
+section_header("Credit Warning / 退款预警", "客户销售表现较好但退款率偏高时，用于销售单独跟进；不改变原客户健康评分。")
+if high_credit_risk.empty:
+    st.info("当前筛选范围内暂无高退款率客户。")
+else:
+    warning_display = high_credit_risk.sort_values(["Credit Rate", "Credit"], ascending=[False, False]).head(30)
+    warning_display = warning_display.rename(
+        columns={
+            "Customer": "客户 / Customer",
+            "Gross Sales": "销售额 / Gross Sales",
+            "Credit": "退款 / Credit",
+            "Net Sales": "调整后销售额 / Net Sales",
+            "Credit Rate": "退款率 / Credit Rate",
+            "Credit Note Count": "退款单数 / Credit Count",
+        }
+    )
+    for column in ["销售额 / Gross Sales", "退款 / Credit", "调整后销售额 / Net Sales"]:
+        if column in warning_display.columns:
+            warning_display[column] = warning_display[column].map(_format_money)
+    if "退款率 / Credit Rate" in warning_display.columns:
+        warning_display["退款率 / Credit Rate"] = warning_display["退款率 / Credit Rate"].map(_format_credit_rate)
+    st.dataframe(
+        warning_display[[column for column in ["客户 / Customer", "销售额 / Gross Sales", "退款 / Credit", "调整后销售额 / Net Sales", "退款率 / Credit Rate", "退款单数 / Credit Count"] if column in warning_display.columns]],
+        use_container_width=True,
+        hide_index=True,
+    )
 
 section_header("风险客户行动表", "在风险原因后给出规则型建议动作。")
 risk_table = result.risk_customers.copy()

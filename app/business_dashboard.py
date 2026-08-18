@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from app.config import DATE_BASIS_LABELS
+from app.credit_context import scoped_credit_kpis, scoped_credit_reasons, scoped_customer_credits, scoped_product_group_credits, top_credit_value
 from app.customer_health import active_customer_metrics
 from app.date_periods import WeekContext, week_context
 from app.executive_insights import (
@@ -626,6 +627,35 @@ def _render_summary_cards(cards: list[dict[str, str | bool]]) -> None:
     st.markdown(f'<div class="xf-summary-card-grid">{"".join(html_cards)}</div>', unsafe_allow_html=True)
 
 
+def _credit_rate_text(value: float | None) -> str:
+    return "N/A" if value is None or pd.isna(value) else _format_percent(float(value))
+
+
+def _render_business_health(df: pd.DataFrame) -> None:
+    kpis = scoped_credit_kpis(df)
+    product_groups = scoped_product_group_credits(df)
+    customers = scoped_customer_credits(df)
+    reasons = scoped_credit_reasons(df)
+    top_group = top_credit_value(product_groups, "Product Group")
+    top_customer = top_credit_value(customers, "Customer")
+    top_reason = top_credit_value(reasons, "Reason", "Credit Amount")
+
+    section_header("经营健康", "Business Health")
+    _render_summary_cards(
+        [
+            {"label": "Gross Sales / 销售额", "value": money(float(kpis.get("Gross Sales") or 0.0))},
+            {"label": "Credit / 退款", "value": money(float(kpis.get("Credit Amount") or 0.0))},
+            {"label": "Net Sales / 调整后销售额", "value": money(float(kpis.get("Net Sales") or 0.0)), "featured": True},
+            {"label": "Credit Rate / 退款率", "value": _credit_rate_text(kpis.get("Credit Rate"))},
+        ]
+    )
+    st.caption(
+        f"本期退款 {money(float(kpis.get('Credit Amount') or 0.0))}，"
+        f"占销售额 {_credit_rate_text(kpis.get('Credit Rate'))}。"
+        f"主要退款产品系列：{top_group}；主要退款客户：{top_customer}；主要退款原因：{top_reason}。"
+    )
+
+
 def _format_date_range(start: pd.Timestamp, end: pd.Timestamp) -> str:
     return f"{start.date()} 至 {end.date()}"
 
@@ -723,6 +753,7 @@ def render_business_dashboard(df: pd.DataFrame) -> None:
 
     section_header("销售与目标进度")
     _render_executive_kpis(metrics, targets)
+    _render_business_health(df)
 
     st.divider()
     st.markdown("#### 年度经营")

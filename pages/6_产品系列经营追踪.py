@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.auth import require_login
+from app.credit_context import scoped_credit_kpis, scoped_product_group_credits
 from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.product_range_metrics import (
@@ -57,6 +58,12 @@ def _fmt_percent_plain(value) -> str:
     return percent(float(value))
 
 
+def _fmt_credit_rate(value) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return percent(float(value))
+
+
 def _display_table(df: pd.DataFrame) -> pd.DataFrame:
     display = df.copy()
     money_cols = [
@@ -69,9 +76,12 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
         "本月目标",
         "Annual Target",
         "距离目标差额",
+        "Credit",
+        "Net Sales",
     ]
     signed_percent_cols = ["同比增长率"]
     plain_percent_cols = ["环比增长率", "年累计同比"]
+    credit_percent_cols = ["Credit Rate"]
     for col in money_cols:
         if col in display.columns:
             display[col] = display[col].map(_fmt_money)
@@ -81,6 +91,9 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
     for col in plain_percent_cols:
         if col in display.columns:
             display[col] = display[col].map(_fmt_percent_plain)
+    for col in credit_percent_cols:
+        if col in display.columns:
+            display[col] = display[col].map(_fmt_credit_rate)
     if "目标完成率" in display.columns:
         display["目标完成率"] = display["目标完成率"].map(lambda value: "未配置" if value is None or pd.isna(value) else percent(float(value)))
     return display
@@ -352,6 +365,20 @@ def _comparison_data_for_yoy(source_df: pd.DataFrame, filtered_df: pd.DataFrame)
     return comparison.loc[current_mask | previous_mask].copy()
 
 
+def _current_month_sales_scope(data: pd.DataFrame, ctx, product_range: str | None) -> pd.DataFrame:
+    dates = pd.to_datetime(data["Performance Date"], errors="coerce").dt.normalize()
+    mask = dates.between(ctx.month_start.normalize(), ctx.month_end.normalize(), inclusive="both")
+    scoped = data.loc[mask].copy()
+    if product_range and product_range != "全部" and RANGE_COLUMN in scoped.columns:
+        scoped = scoped[scoped[RANGE_COLUMN].fillna("未分类").astype(str).eq(str(product_range))].copy()
+    scoped.attrs.update(data.attrs)
+    scoped.attrs["date_range"] = (str(ctx.month_start.date()), str(ctx.month_end.date()))
+    if product_range and product_range != "全部":
+        scoped.attrs["product_groups"] = [str(product_range)]
+        scoped.attrs["all_product_group_count"] = len(data[RANGE_COLUMN].fillna("未分类").astype(str).unique()) if RANGE_COLUMN in data.columns else 1
+    return scoped
+
+
 @st.cache_data(show_spinner=False)
 def _cached_range_overview(data: pd.DataFrame, targets: pd.DataFrame | None, year: int, month: int):
     return build_range_overview(data, targets, year, month)
@@ -517,6 +544,29 @@ else:
     if selected_range != "全部":
         table = table[table["产品系列"].eq(selected_range)].copy()
 
+    credit_scope = _current_month_sales_scope(comparison_data, ctx, selected_range)
+    credit_kpis = scoped_credit_kpis(credit_scope)
+    credit_cols = st.columns(4)
+    credit_cols[0].metric("Gross Sales / 销售额", money(float(credit_kpis.get("Gross Sales") or 0.0)))
+    credit_cols[1].metric("Credit / 退款", money(float(credit_kpis.get("Credit Amount") or 0.0)))
+    credit_cols[2].metric("Net Sales / 调整后销售额", money(float(credit_kpis.get("Net Sales") or 0.0)))
+    credit_cols[3].metric("Credit Rate / 退款率", _fmt_credit_rate(credit_kpis.get("Credit Rate")))
+
+    group_credits = scoped_product_group_credits(credit_scope)
+    if not group_credits.empty:
+        group_credit_columns = ["Product Group", "Credit", "Net Sales", "Credit Rate"]
+        table = table.merge(
+            group_credits[[column for column in group_credit_columns if column in group_credits.columns]].rename(columns={"Product Group": "产品系列"}),
+            on="产品系列",
+            how="left",
+        )
+    for column in ["Credit", "Net Sales"]:
+        if column not in table.columns:
+            table[column] = 0.0 if column == "Credit" else table["本月销售额"]
+        table[column] = pd.to_numeric(table[column], errors="coerce").fillna(0 if column == "Credit" else table["本月销售额"])
+    if "Credit Rate" not in table.columns:
+        table["Credit Rate"] = None
+
     _render_total_summary(table, comparison_data, amount_targets, ctx, selected_range)
 
     section_header("精简系列经营总览表")
@@ -530,6 +580,9 @@ else:
         "当前状态",
         "产品系列",
         "本月销售额",
+        "Credit",
+        "Net Sales",
+        "Credit Rate",
         "本月目标",
         "目标完成率",
         "同比增长率",

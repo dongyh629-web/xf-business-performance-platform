@@ -8,6 +8,7 @@ import streamlit as st
 from app.auth import require_login
 from app.business_metrics import aggregate_customer_profitability, get_cached_business_metrics, profitability_kpis
 from app.config import ABC_A_THRESHOLD, ABC_B_THRESHOLD
+from app.credit_context import scoped_credit_kpis, scoped_customer_credits
 from app.customer_metrics import abc_distribution, build_customer_summary, concentration_metrics
 from app.data import monthly_sales, top_entity_table, top_table
 from app.google_drive import DriveUserError, ensure_drive_data_loaded, load_drive_cost_snapshots, render_drive_data_load_prompt, render_data_source_sidebar
@@ -86,6 +87,10 @@ def _customer_summary_styler(table: pd.DataFrame):
         styled = styled.map(_profit_style, subset=["同比增长"])
     if "成本覆盖率" in table.columns:
         styled = styled.map(_coverage_style, subset=["成本覆盖率"])
+    if "退款率" in table.columns:
+        styled = styled.map(_coverage_style, subset=["退款率"])
+    if "退款金额" in table.columns:
+        styled = styled.map(_profit_style, subset=["退款金额"])
     return styled
 
 
@@ -179,6 +184,28 @@ def _merge_customer_profitability(customer_summary: pd.DataFrame, metrics_df: pd
     ).drop(columns=["Customer"], errors="ignore")
 
 
+def _merge_customer_credits(customer_summary: pd.DataFrame, sales_df: pd.DataFrame) -> pd.DataFrame:
+    if customer_summary.empty:
+        return customer_summary
+    credits = scoped_customer_credits(sales_df)
+    result = customer_summary.copy()
+    if credits.empty:
+        result["Credit"] = 0.0
+        result["Net Sales"] = result.get("Total Sales", 0.0)
+        result["Credit Rate"] = None
+        return result
+    credit_columns = ["Customer Key", "Credit", "Net Sales", "Credit Rate", "Credit Note Count"]
+    merged = result.merge(credits[[column for column in credit_columns if column in credits.columns]], on="Customer Key", how="left")
+    merged["Credit"] = pd.to_numeric(merged.get("Credit"), errors="coerce").fillna(0)
+    if "Net Sales" not in merged.columns:
+        merged["Net Sales"] = pd.to_numeric(merged.get("Total Sales"), errors="coerce").fillna(0) - merged["Credit"]
+    else:
+        merged["Net Sales"] = pd.to_numeric(merged["Net Sales"], errors="coerce").fillna(pd.to_numeric(merged.get("Total Sales"), errors="coerce").fillna(0) - merged["Credit"])
+    merged["Credit Rate"] = pd.to_numeric(merged.get("Credit Rate"), errors="coerce")
+    merged["Credit Note Count"] = pd.to_numeric(merged.get("Credit Note Count"), errors="coerce").fillna(0)
+    return merged
+
+
 inject_global_styles()
 require_login("customer_analysis")
 st.title("客户分析")
@@ -210,6 +237,7 @@ st.caption("以下客户等级和购买行为基于当前所选日期口径、�
 
 customer_summary, conflicts = build_customer_summary(filtered)
 customer_summary = _merge_customer_profitability(customer_summary, filtered)
+customer_summary = _merge_customer_credits(customer_summary, filtered)
 concentration = concentration_metrics(customer_summary)
 total_sales = float(filtered["Sales Amount"].sum())
 order_count = int(filtered["Order No."].nunique())
@@ -217,6 +245,7 @@ avg_order = total_sales / order_count if order_count else 0
 customer_count = int(customer_summary["Customer Key"].nunique()) if not customer_summary.empty else 0
 order_metrics = _order_amount_metrics(filtered, customer_summary)
 profit_kpis = profitability_kpis(filtered)
+credit_kpis = scoped_credit_kpis(filtered)
 
 metric_cards(
     [
@@ -233,6 +262,14 @@ metric_cards(
         ("毛利率", percent_or_na(profit_kpis["Commercial Gross Margin"])),
         ("成本", money_or_na(profit_kpis["Commercial Cost"])),
         ("ASP", money_or_na(profit_kpis["ASP"])),
+    ]
+)
+metric_cards(
+    [
+        ("Gross Sales / 销售额", money(float(credit_kpis.get("Gross Sales") or 0.0))),
+        ("Credit / 退款", money(float(credit_kpis.get("Credit Amount") or 0.0))),
+        ("Net Sales / 调整后销售额", money(float(credit_kpis.get("Net Sales") or 0.0))),
+        ("Credit Rate / 退款率", percent_or_na(credit_kpis.get("Credit Rate"))),
     ]
 )
 metric_cards(
@@ -287,6 +324,9 @@ else:
             "客户名称": table["Customer Name"].fillna(""),
             "客户代码": table["Customer Code"].fillna(table["Customer Key"]),
             "销售额": table["Total Sales"],
+            "退款金额": table["Credit"] if "Credit" in table.columns else 0.0,
+            "调整后销售额": table["Net Sales"] if "Net Sales" in table.columns else table["Total Sales"],
+            "退款率": table["Credit Rate"] if "Credit Rate" in table.columns else pd.NA,
             "已核算销售": table["Costed Normal Sales"] if "Costed Normal Sales" in table.columns else pd.NA,
             "毛利": table["Commercial Gross Profit"] if "Commercial Gross Profit" in table.columns else pd.NA,
             "毛利率": table["Commercial Gross Margin"] if "Commercial Gross Margin" in table.columns else pd.NA,
@@ -320,6 +360,9 @@ else:
 
     sort_options = {
         "销售额（高到低）": ("销售额", False),
+        "调整后销售额（高到低）": ("调整后销售额", False),
+        "退款金额（高到低）": ("退款金额", False),
+        "退款率（高到低）": ("退款率", False),
         "已核算销售（高到低）": ("已核算销售", False),
         "毛利（高到低）": ("毛利", False),
         "毛利率（高到低）": ("毛利率", False),
@@ -348,7 +391,7 @@ else:
     filtered_table = filtered_table[filtered_table["客户类型"].isin(selected_types)]
 
     sort_col, ascending = sort_options[sort_label]
-    if sort_col in ["已核算销售", "毛利", "毛利率", "成本", "ASP", "成本覆盖率", "同比增长"]:
+    if sort_col in ["调整后销售额", "退款金额", "退款率", "已核算销售", "毛利", "毛利率", "成本", "ASP", "成本覆盖率", "同比增长"]:
         filtered_table = filtered_table.assign(_sort_value=pd.to_numeric(filtered_table[sort_col], errors="coerce").fillna(float("-inf")))
         filtered_table = filtered_table.sort_values("_sort_value", ascending=ascending).drop(columns=["_sort_value"])
     else:
@@ -368,6 +411,9 @@ else:
     else:
         formatted_table = filtered_table.copy()
         formatted_table["销售额"] = formatted_table["销售额"].map(money)
+        formatted_table["退款金额"] = formatted_table["退款金额"].map(money)
+        formatted_table["调整后销售额"] = formatted_table["调整后销售额"].map(money)
+        formatted_table["退款率"] = formatted_table["退款率"].map(percent_or_na)
         formatted_table["已核算销售"] = formatted_table["已核算销售"].map(money_or_na)
         formatted_table["毛利"] = formatted_table["毛利"].map(money_or_na)
         formatted_table["毛利率"] = formatted_table["毛利率"].map(percent_or_na)
@@ -393,6 +439,9 @@ else:
                     "客户名称",
                     "客户代码",
                     "销售额",
+                    "退款金额",
+                    "调整后销售额",
+                    "退款率",
                     "已核算销售",
                     "毛利",
                     "毛利率",

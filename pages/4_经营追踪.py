@@ -12,6 +12,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 from app.auth import require_login
 from app.config import DATE_BASIS_LABELS
+from app.credit_context import scoped_credit_kpis
 from app.data import apply_date_basis
 from app.google_drive import MANUAL_SOURCE_LABEL, ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.target_metrics import (
@@ -37,6 +38,12 @@ def _format_money_or_blank(value: float | None) -> str:
     if value is None or pd.isna(value):
         return ""
     return money(float(value))
+
+
+def _format_credit_rate(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return percent(float(value))
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -468,6 +475,14 @@ if df is None:
 filtered = show_filters(df, "tracking")
 show_code_warning(filtered)
 show_context_summary(filtered)
+
+section_header("销售净额 / Gross to Net")
+credit_kpis = scoped_credit_kpis(filtered)
+credit_cols = st.columns(4)
+credit_cols[0].metric("Gross Sales / 销售额", money(float(credit_kpis.get("Gross Sales") or 0.0)))
+credit_cols[1].metric("Credit / 退款", money(float(credit_kpis.get("Credit Amount") or 0.0)))
+credit_cols[2].metric("Net Sales / 调整后销售额", money(float(credit_kpis.get("Net Sales") or 0.0)))
+credit_cols[3].metric("Credit Rate / 退款率", _format_credit_rate(credit_kpis.get("Credit Rate")))
 
 current_year = analysis_year(filtered)
 if current_year is None:
