@@ -172,12 +172,12 @@ if role_allows(auth_user.role, "customers"):
     pages["👥 客户"] = [customer_analysis_page, customer_health_page]
 if role_allows(auth_user.role, "products"):
     pages["📦 产品"] = [product_analysis_page]
+if role_allows(auth_user.role, "returns"):
+    pages["↩️ 退货与退款"] = [returns_credits_page]
 if role_allows(auth_user.role, "finance"):
     profit_pages = []
     if role_allows(auth_user.role, "margin"):
         profit_pages.append(profitability_page)
-    if role_allows(auth_user.role, "returns"):
-        profit_pages.append(returns_credits_page)
     if role_allows(auth_user.role, "data_validation"):
         profit_pages.append(data_validation_page)
     if profit_pages:
@@ -219,13 +219,21 @@ NAV_GROUPS = [
         ],
     },
     {
+        "key": "returns",
+        "area": "returns",
+        "label": "退货与退款",
+        "english": "Returns & Credits",
+        "items": [
+            {"title": "退货与退款经营分析", "english": "Returns & Credits", "page": "pages/9_Returns_Credits.py"},
+        ],
+    },
+    {
         "key": "profitability",
         "area": "finance",
         "label": "利润",
         "english": "Profitability",
         "items": [
             {"title": "利润分析", "english": "Profitability", "page": "pages/7_Profitability.py", "permission": "margin"},
-            {"title": "退货与退款", "english": "Returns & Credits", "page": "pages/9_Returns_Credits.py", "permission": "returns"},
             {"title": "数据验证", "english": "Data Validation", "page": "pages/8_Data_Validation.py", "permission": "data_validation"},
         ],
     },

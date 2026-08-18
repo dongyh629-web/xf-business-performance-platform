@@ -95,6 +95,7 @@ ROLE_PERMISSIONS = {
         "customer_analysis",
         "customer_health",
         "product_analysis",
+        "returns",
     },
     "Finance": {
         "overview",
