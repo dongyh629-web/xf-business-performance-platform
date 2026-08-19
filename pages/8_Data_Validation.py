@@ -42,7 +42,7 @@ def _bilingual(chinese: str, english: str) -> str:
 COLUMN_LABELS = {
     "Completed Date": _bilingual("完成日期", "Completed Date"),
     "Customer": _bilingual("客户", "Customer"),
-    "Customer Label": _bilingual("客户", "Customer"),
+    "Customer Label": _bilingual("客户标签", "Customer Label"),
     "Product Code": _bilingual("产品编码", "Product Code"),
     "Product Name": _bilingual("产品名称", "Product Name"),
     "Product Group": _bilingual("产品系列", "Product Group"),
@@ -95,6 +95,46 @@ ZERO_VALUE_STATUS_LABELS = {
 }
 
 
+def _safe_display_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _unique_display_columns(columns: pd.Index) -> list[str]:
+    counts: dict[str, int] = {}
+    result: list[str] = []
+    for column in columns:
+        label = str(column)
+        counts[label] = counts.get(label, 0) + 1
+        if counts[label] == 1:
+            result.append(label)
+        else:
+            result.append(f"{label} ({counts[label]})")
+    return result
+
+
+def make_arrow_safe_dataframe(data: pd.DataFrame) -> pd.DataFrame:
+    display = data.copy()
+    if display.columns.has_duplicates:
+        display.columns = _unique_display_columns(display.columns)
+
+    complex_types = (dict, list, tuple, set)
+    for column in display.columns:
+        series = display[column]
+        if series.dtype != "object":
+            continue
+        non_null = series.dropna()
+        if non_null.map(lambda value: isinstance(value, complex_types)).any():
+            display[column] = series.map(_safe_display_text)
+    return display
+
+
 def _format_table(data: pd.DataFrame) -> pd.DataFrame:
     display = data.copy()
     for column in [
@@ -122,7 +162,8 @@ def _format_table(data: pd.DataFrame) -> pd.DataFrame:
         display["Zero-value Validation Status"] = display["Zero-value Validation Status"].map(
             lambda value: ZERO_VALUE_STATUS_LABELS.get(str(value), str(value))
         )
-    return display.rename(columns={column: label for column, label in COLUMN_LABELS.items() if column in display.columns})
+    display = display.rename(columns={column: label for column, label in COLUMN_LABELS.items() if column in display.columns})
+    return make_arrow_safe_dataframe(display)
 
 
 def _validation_columns(data: pd.DataFrame) -> pd.DataFrame:
