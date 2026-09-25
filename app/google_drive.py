@@ -82,6 +82,7 @@ SALES_REFRESH_CORE_KEYS = {
     "sales_drive_modified_time",
 }
 REFRESH_STATE_PREFIXES = ("drive_sales_", "sales_drive_", "drive_cost_", "cost_snapshot", "drive_credit_", "credit_", "drive_target_", "target_")
+TARGET_MANAGEMENT_WIDGET_PREFIXES = ("target_editor_", "target_annual_input_")
 SUCCESSFUL_REFRESH_STATUSES = {"loaded", "cached", "unchanged"}
 REFRESH_TRANSACTION_TIMEOUT_SECONDS = 180
 REFRESH_STALE_LOCK_SECONDS = 120
@@ -447,10 +448,21 @@ def _restore_target_cache(metadata: DriveFileMetadata | None = None) -> bool:
         return False
     try:
         with CACHE_TARGETS_PATH.open("rb") as handle:
-            parsed = pickle.load(handle)
+            cached = pickle.load(handle)
+        if isinstance(cached, dict) and "parsed" in cached:
+            parsed = cached["parsed"]
+            if metadata and (
+                cached.get("file_id") != metadata.file_id
+                or cached.get("modified_time") != metadata.modified_time
+            ):
+                logger.warning("Local target cache version does not match metadata; rebuilding cache")
+                return False
+        else:
+            parsed = cached
         file_name = metadata.name if metadata else getattr(parsed, "cache_file_name", "Cached targets")
         modified_time = metadata.modified_time if metadata else getattr(parsed, "cache_modified_time", None)
-        store_target_workbook_in_session(parsed, file_name, DRIVE_SOURCE_LABEL, "drive", modified_time)
+        file_id = metadata.file_id if metadata else None
+        store_target_workbook_in_session(parsed, file_name, DRIVE_SOURCE_LABEL, "drive", modified_time, file_id)
         if metadata:
             _set_drive_target_success(metadata, parsed, "本地缓存", [])
         else:
@@ -468,14 +480,22 @@ def _restore_target_cache(metadata: DriveFileMetadata | None = None) -> bool:
         return False
 
 
-def _write_target_cache(metadata: DriveFileMetadata, parsed: XFTargetWorkbook) -> None:
+def _write_target_cache(metadata: DriveFileMetadata, parsed: XFTargetWorkbook) -> bool:
     start = _timer()
     try:
         rows = 0 if parsed.company_targets is None else len(parsed.company_targets)
         logger.info("cache_write_started cache=targets rows=%s source_file=%s", rows, metadata.name)
         _ensure_cache_dir()
         with CACHE_TARGETS_PATH.open("wb") as handle:
-            pickle.dump(parsed, handle)
+            pickle.dump(
+                {
+                    "parsed": parsed,
+                    "file_id": metadata.file_id,
+                    "modified_time": metadata.modified_time,
+                    "source_version": _target_source_version(metadata.name, "drive", metadata.modified_time, metadata.file_id),
+                },
+                handle,
+            )
         cache_metadata = _read_cache_metadata()
         cache_metadata.update(
             {
@@ -484,14 +504,17 @@ def _write_target_cache(metadata: DriveFileMetadata, parsed: XFTargetWorkbook) -
                 "target_modified_time": metadata.modified_time,
                 "target_file_name": metadata.name,
                 "target_size": metadata.size,
+                "target_source_version": _target_source_version(metadata.name, "drive", metadata.modified_time, metadata.file_id),
                 "cache_created_at": _now_text(),
             }
         )
         _write_cache_metadata(cache_metadata)
         logger.info("cache_write_completed cache=targets elapsed_seconds=%.3f rows=%s source_file=%s", _elapsed_seconds(start), rows, metadata.name)
         _perf_log("write_target_cache", start, rows, "miss")
+        return True
     except Exception:
         logger.exception("Local target cache write failed")
+        return False
 
 
 def _restore_any_local_cache() -> DriveLoadStatus | None:
@@ -1615,21 +1638,86 @@ def _set_drive_target_success(metadata: DriveFileMetadata, parsed: XFTargetWorkb
     st.session_state["drive_target_candidates"] = [candidate.metadata.name for candidate in candidates[:10]]
 
 
-def store_target_workbook_in_session(parsed: XFTargetWorkbook, file_name: str, source_label: str, source_type: str, modified_time: str | None = None) -> None:
+def _target_source_version(
+    file_name: str,
+    source_type: str,
+    modified_time: str | None = None,
+    file_id: str | None = None,
+) -> str:
+    return "|".join(
+        [
+            str(source_type or "unknown"),
+            str(file_id or file_name or "unknown"),
+            str(modified_time or "unversioned"),
+        ]
+    )
+
+
+def _current_target_source_version(session_state: Any) -> str | None:
+    version = session_state.get("target_source_version")
+    if version:
+        return str(version)
+    file_id = session_state.get("target_source_file_id") or session_state.get("drive_target_file_id")
+    modified_time = session_state.get("target_source_modified_time") or session_state.get("drive_target_modified_time")
+    if not file_id and not modified_time:
+        return None
+    return _target_source_version(
+        str(session_state.get("target_excel_name") or session_state.get("drive_target_file_name") or "unknown"),
+        str(session_state.get("target_source_type") or "drive"),
+        None if modified_time is None else str(modified_time),
+        None if file_id is None else str(file_id),
+    )
+
+
+def _clear_target_management_widget_state(session_state: Any) -> None:
+    for key in list(session_state.keys()):
+        if any(str(key).startswith(prefix) for prefix in TARGET_MANAGEMENT_WIDGET_PREFIXES):
+            session_state.pop(key, None)
+    session_state.pop("target_revised_source_version", None)
+
+
+def store_target_workbook_in_session(
+    parsed: XFTargetWorkbook,
+    file_name: str,
+    source_label: str,
+    source_type: str,
+    modified_time: str | None = None,
+    file_id: str | None = None,
+) -> None:
     st = _get_streamlit()
+    source_version = _target_source_version(file_name, source_type, modified_time, file_id)
+    previous_version = _current_target_source_version(st.session_state)
+    if previous_version is not None and previous_version != source_version:
+        _clear_target_management_widget_state(st.session_state)
     target_df = parsed.company_targets.copy()
     target_df["Revised Target"] = pd.to_numeric(target_df["Revised Target"], errors="coerce").fillna(
         pd.to_numeric(target_df["Original Target"], errors="coerce")
     )
-    st.session_state["target_data"] = target_df
-    st.session_state["target_annual_targets"] = parsed.annual_targets
-    st.session_state["target_amount_data"] = parsed.amount_data
-    st.session_state["target_case_data"] = parsed.case_data
-    st.session_state["target_excel_name"] = file_name
-    st.session_state["target_structure_label"] = parsed.structure_label
-    st.session_state["target_source"] = source_label
-    st.session_state["target_source_type"] = source_type
-    st.session_state["target_drive_modified_time"] = modified_time
+    amount_data = parsed.amount_data.copy()
+    case_data = parsed.case_data.copy()
+    target_df.attrs["target_source_version"] = source_version
+    amount_data.attrs["target_source_version"] = source_version
+    case_data.attrs["target_source_version"] = source_version
+    st.session_state.update(
+        {
+            "target_data": target_df,
+            "target_annual_targets": dict(parsed.annual_targets),
+            "target_amount_data": amount_data,
+            "target_case_data": case_data,
+            "target_excel_name": file_name,
+            "target_structure_label": parsed.structure_label,
+            "target_source": source_label,
+            "target_source_type": source_type,
+            "target_drive_modified_time": modified_time,
+            "target_source_file_id": file_id,
+            "target_source_modified_time": modified_time,
+            "target_source_version": source_version,
+            "target_data_version": source_version,
+            "target_amount_data_version": source_version,
+            "target_case_data_version": source_version,
+            "target_annual_targets_version": source_version,
+        }
+    )
 
 
 def _load_sales_file(service, config: DriveConfig, force: bool) -> DriveLoadItemStatus:
@@ -1903,12 +1991,13 @@ def _load_target_file(service, config: DriveConfig, force: bool) -> DriveLoadIte
             failures.append(f"{metadata.name}: 解析失败")
             logger.exception("Google Drive target parse failed file_name=%s", metadata.name)
             continue
-        store_target_workbook_in_session(parsed, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time)
+        if not _write_target_cache(metadata, parsed):
+            raise DriveUserError("目标缓存写入失败，当前继续使用上一次成功目标数据。")
+        store_target_workbook_in_session(parsed, metadata.name, DRIVE_SOURCE_LABEL, "drive", metadata.modified_time, metadata.file_id)
         st.session_state["target_drive_file_id"] = metadata.file_id
         st.session_state["target_drive_modified_time"] = metadata.modified_time
         reason = _target_selection_reason(candidate, analysis_year)
         _set_drive_target_success(metadata, parsed, reason, candidates)
-        _write_target_cache(metadata, parsed)
         target_rows = len(st.session_state.get("target_data", [])) if st.session_state.get("target_data") is not None else 0
         logger.info(
             "targets_loaded_summary source_file=%s rows=%s target_year=%s reason=%s",

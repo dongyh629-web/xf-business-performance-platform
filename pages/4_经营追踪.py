@@ -403,6 +403,7 @@ annual_input = st.number_input(
     value=float(pd.to_numeric(_complete_target_editor_rows(base_targets, target_year)["Revised Target"], errors="coerce").fillna(0).sum()),
     step=50000.0,
     format="%.0f",
+    key=f"target_annual_input_{target_year}",
 )
 editor_rows = _complete_target_editor_rows(base_targets, target_year)
 if st.button("平均分配年度目标"):
@@ -443,6 +444,7 @@ with button_cols[0]:
             )
             st.session_state["target_source"] = "当前会话手动调整"
             st.session_state["target_source_type"] = "manual"
+            st.session_state["target_revised_source_version"] = st.session_state.get("target_source_version")
             diff = float(pd.to_numeric(edited_targets["Revised Target"], errors="coerce").fillna(0).sum()) - annual_input
             if abs(diff) > 0.01:
                 st.warning(f"12个月 Revised Target 合计与输入年度目标差额为 {money(diff)}。")
@@ -461,6 +463,7 @@ with button_cols[1]:
         )
         st.session_state["target_source"] = "当前会话手动调整"
         st.session_state["target_source_type"] = "manual"
+        st.session_state["target_revised_source_version"] = st.session_state.get("target_source_version")
         st.success("已恢复为原始目标。")
         st.rerun()
 
