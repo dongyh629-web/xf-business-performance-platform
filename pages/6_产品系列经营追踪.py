@@ -9,6 +9,7 @@ from app.auth import require_login
 from app.credit_context import scoped_credit_kpis
 from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
+from app.product_groups import normalize_product_group_copy, unmatched_product_groups
 from app.product_range_metrics import (
     RANGE_COLUMN,
     build_monthly_trend,
@@ -209,6 +210,7 @@ def _monthly_target_detail(amount_targets: pd.DataFrame | None, table: pd.DataFr
         & amount_targets["Month"].astype("Int64").eq(int(ctx.month))
         & ~amount_targets[RANGE_COLUMN].astype(str).eq("公司整体")
     ].copy()
+    rows = normalize_product_group_copy(rows)
     if product_range and product_range != "全部":
         rows = rows[rows[RANGE_COLUMN].astype(str).eq(str(product_range))]
     if rows.empty:
@@ -527,6 +529,22 @@ else:
     credit_cols[3].metric("Credit Rate / 退款率", _fmt_credit_rate(credit_kpis.get("Credit Rate")))
 
     _render_total_summary(table, comparison_data, amount_targets, ctx, selected_range)
+
+    if amount_targets is not None and not amount_targets.empty:
+        target_rows = amount_targets[
+            amount_targets["Year"].astype("Int64").eq(selected_year)
+            & amount_targets["Month"].astype("Int64").eq(selected_month)
+            & ~amount_targets[RANGE_COLUMN].astype(str).eq("公司整体")
+        ].copy()
+        value_col = "Revised Target" if "Revised Target" in target_rows.columns else "Original Target"
+        if value_col in target_rows.columns:
+            target_rows = target_rows[pd.to_numeric(target_rows[value_col], errors="coerce").fillna(0).ne(0)]
+        unmatched = unmatched_product_groups(
+            target_rows.get(RANGE_COLUMN, pd.Series(dtype="object")),
+            df.get(RANGE_COLUMN, pd.Series(dtype="object")),
+        )
+        if unmatched:
+            st.warning("目标数据中存在未匹配产品系列：" + "、".join(unmatched))
 
     section_header("精简系列经营总览表")
     status_options = sorted(table["当前状态"].dropna().unique().tolist())

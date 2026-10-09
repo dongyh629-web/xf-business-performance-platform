@@ -4,10 +4,56 @@ import unittest
 
 import pandas as pd
 
+from app.product_groups import canonical_product_group, normalize_product_group_copy, unmatched_product_groups
 from app.product_range_metrics import analysis_context, build_range_overview, build_week_progress
 
 
 class ProductRangeWeekProgressTests(unittest.TestCase):
+    def test_target_product_group_aliases_match_sales_without_mutating_source(self) -> None:
+        targets = pd.DataFrame(
+            {
+                "Year": [2026, 2026],
+                "Month": [10, 10],
+                "Product Group": ["Shrimp Paste(虾滑)", "7.0干货Ambient Pack/空酱"],
+                "Original Target": [41078.0, 7000.0],
+                "Revised Target": [41078.0, 7000.0],
+            }
+        )
+        sales = pd.DataFrame(
+            {
+                "Performance Date": pd.to_datetime(["2026-10-09", "2026-10-09"]),
+                "Sales Amount": [1000.0, 500.0],
+                "Product Group": ["8.0虾滑Shrimp Paste", "7.0 空酱部队Ambient Pack"],
+            }
+        )
+
+        overview, _ctx = build_range_overview(sales, targets, 2026, 10)
+
+        shrimp = overview.loc[overview["Product Group"].eq("8.0虾滑Shrimp Paste")].iloc[0]
+        ambient = overview.loc[overview["Product Group"].eq("7.0 空酱部队Ambient Pack")].iloc[0]
+        self.assertEqual(41078.0, shrimp["Monthly Target"])
+        self.assertEqual(7000.0, ambient["Monthly Target"])
+        self.assertEqual(48078.0, overview["Monthly Target"].sum())
+        self.assertEqual("Shrimp Paste(虾滑)", targets.iloc[0]["Product Group"])
+        self.assertEqual("7.0干货Ambient Pack/空酱", targets.iloc[1]["Product Group"])
+
+    def test_unmatched_target_product_groups_are_reported_after_alias_mapping(self) -> None:
+        unmatched = unmatched_product_groups(
+            ["Shrimp Paste(虾滑)", "Future Range"],
+            ["8.0虾滑Shrimp Paste", "Existing Range"],
+        )
+
+        self.assertEqual(["Future Range"], unmatched)
+        self.assertEqual("7.0 空酱部队Ambient Pack", canonical_product_group("7.0干货Ambient Pack/空酱"))
+        self.assertEqual("香肠系列 Sausage Series", canonical_product_group("Sausage Series/烤肠"))
+
+    def test_normalization_returns_copy(self) -> None:
+        source = pd.DataFrame({"Product Group": ["Shrimp Paste(虾滑)"]})
+        normalized = normalize_product_group_copy(source)
+
+        self.assertEqual("Shrimp Paste(虾滑)", source.iloc[0]["Product Group"])
+        self.assertEqual("8.0虾滑Shrimp Paste", normalized.iloc[0]["Product Group"])
+
     def test_range_overview_has_per_group_prior_full_month_and_achievement(self) -> None:
         sales = pd.DataFrame(
             {

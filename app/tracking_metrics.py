@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from app.product_groups import normalize_product_group_copy
+
 from app.config import TRACKING_CLOSE_TO_TARGET_THRESHOLD
 from app.target_metrics import MONTH_LABELS
 
@@ -205,6 +207,7 @@ def build_product_group_amount_tracking(
     ].copy()
     if target_rows.empty:
         return pd.DataFrame()
+    target_rows = normalize_product_group_copy(target_rows)
 
     comparison_df = sales_df if comparison_sales_df is None else comparison_sales_df
     rows = []

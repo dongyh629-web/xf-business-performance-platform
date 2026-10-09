@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from app.tracking_metrics import build_monthly_tracking_table
+from app.tracking_metrics import build_monthly_tracking_table, build_product_group_amount_tracking
 
 
 def _sales(rows: list[tuple[str, float, str]]) -> pd.DataFrame:
@@ -28,6 +28,24 @@ def _targets(year: int) -> pd.DataFrame:
 
 
 class MonthlyTrackingYoYTests(unittest.TestCase):
+    def test_product_group_tracking_uses_canonical_target_name(self) -> None:
+        sales = _sales([("2026-10-09", 1000.0, "8.0虾滑Shrimp Paste")])
+        targets = pd.DataFrame(
+            {
+                "Year": [2026],
+                "Month": [10],
+                "Product Group": ["Shrimp Paste(虾滑)"],
+                "Original Target": [41078.0],
+                "Revised Target": [41078.0],
+            }
+        )
+
+        result = build_product_group_amount_tracking(sales, targets, 2026, sales)
+
+        self.assertEqual("8.0虾滑Shrimp Paste", result.iloc[0]["Product Group"])
+        self.assertEqual(1000.0, result.iloc[0]["Actual Sales Amount"])
+        self.assertAlmostEqual(1000.0 / 41078.0, result.iloc[0]["Amount Completion Rate"])
+
     def test_previous_year_months_use_comparison_data_not_current_year_filter(self) -> None:
         current_year_sales = _sales(
             [

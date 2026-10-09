@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from app.product_groups import normalize_product_group_copy
+
 
 RANGE_COLUMN = "Product Group"
 
@@ -91,9 +93,16 @@ def _target_table(amount_targets: pd.DataFrame | None, year: int, month: int) ->
     ].copy()
     if targets.empty:
         return pd.DataFrame(columns=[RANGE_COLUMN, "Monthly Target"])
+    targets = normalize_product_group_copy(targets)
     value_col = "Revised Target" if "Revised Target" in targets.columns else "Original Target"
     targets["Monthly Target"] = pd.to_numeric(targets[value_col], errors="coerce")
-    return targets[[RANGE_COLUMN, "Monthly Target"]].dropna(subset=["Monthly Target"])
+    return (
+        targets[[RANGE_COLUMN, "Monthly Target"]]
+        .dropna(subset=["Monthly Target"])
+        .groupby(RANGE_COLUMN, dropna=False)["Monthly Target"]
+        .sum()
+        .reset_index()
+    )
 
 
 def _annual_target_table(amount_targets: pd.DataFrame | None, year: int) -> pd.DataFrame:
@@ -108,6 +117,7 @@ def _annual_target_table(amount_targets: pd.DataFrame | None, year: int) -> pd.D
     ].copy()
     if targets.empty:
         return pd.DataFrame(columns=[RANGE_COLUMN, "Annual Target"])
+    targets = normalize_product_group_copy(targets)
     value_col = "Revised Target" if "Revised Target" in targets.columns else "Original Target"
     targets["Target Value"] = pd.to_numeric(targets[value_col], errors="coerce").fillna(0)
     return targets.groupby(RANGE_COLUMN, dropna=False)["Target Value"].sum().rename("Annual Target").reset_index()
