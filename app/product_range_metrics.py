@@ -273,6 +273,19 @@ def build_week_progress(df: pd.DataFrame, amount_targets: pd.DataFrame | None, c
         weekly = weekly.merge(previous_weekly, on="Week", how="left").fillna({"Previous Weekly": 0})
         weekly["Previous Year Cumulative"] = weekly["Previous Weekly"].cumsum()
     weekly["Cumulative YoY"] = weekly.apply(lambda row: safe_ratio(row["Month Cumulative Sales"] - row["Previous Year Cumulative"], row["Previous Year Cumulative"]), axis=1)
+    previous_full_month_end = ctx.previous_year_start + pd.offsets.MonthEnd(0)
+    previous_full_month = work[
+        work_dates.between(ctx.previous_year_start, previous_full_month_end, inclusive="both")
+    ]
+    previous_full_month_sales = None
+    if not previous_full_month.empty:
+        full_month_total = float(pd.to_numeric(previous_full_month["Sales Amount"], errors="coerce").fillna(0).sum())
+        if full_month_total != 0:
+            previous_full_month_sales = full_month_total
+    weekly["Previous Year Full Month Sales"] = previous_full_month_sales
+    weekly["Percent of Previous Year Full Month"] = weekly["Month Cumulative Sales"].map(
+        lambda value: safe_ratio(value, previous_full_month_sales) if previous_full_month_sales else None
+    )
     weekly["Change vs Previous Week"] = weekly["Weekly Sales"].diff()
     days_elapsed = max((ctx.month_end - ctx.month_start).days + 1, 1)
     days_in_month = int((ctx.month_start + pd.offsets.MonthEnd(0)).day)

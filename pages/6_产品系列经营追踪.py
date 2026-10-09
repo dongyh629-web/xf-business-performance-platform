@@ -362,7 +362,14 @@ def _comparison_data_for_yoy(source_df: pd.DataFrame, filtered_df: pd.DataFrame)
     previous_start = start - pd.DateOffset(years=1)
     previous_end = end - pd.DateOffset(years=1)
     previous_mask = dates.between(previous_start.normalize(), previous_end.normalize(), inclusive="both")
-    return comparison.loc[current_mask | previous_mask].copy()
+    previous_full_month_start = pd.Timestamp(year=int(end.year) - 1, month=int(end.month), day=1)
+    previous_full_month_end = previous_full_month_start + pd.offsets.MonthEnd(0)
+    previous_full_month_mask = dates.between(
+        previous_full_month_start.normalize(),
+        previous_full_month_end.normalize(),
+        inclusive="both",
+    )
+    return comparison.loc[current_mask | previous_mask | previous_full_month_mask].copy()
 
 
 def _current_month_sales_scope(data: pd.DataFrame, ctx, product_range: str | None) -> pd.DataFrame:
@@ -613,6 +620,12 @@ else:
     weekly_display["Month Cumulative Sales"] = weekly_display["Month Cumulative Sales"].map(_fmt_money)
     weekly_display["Previous Year Cumulative"] = weekly_display["Previous Year Cumulative"].map(_fmt_money)
     weekly_display["Cumulative YoY"] = weekly_display["Cumulative YoY"].map(_fmt_percent)
+    weekly_display["Previous Year Full Month Sales"] = weekly_display["Previous Year Full Month Sales"].map(
+        lambda value: "—" if value is None or pd.isna(value) else _fmt_money(value)
+    )
+    weekly_display["Percent of Previous Year Full Month"] = weekly_display["Percent of Previous Year Full Month"].map(
+        _fmt_percent_plain
+    )
     weekly_display["Time Progress"] = weekly_display["Time Progress"].map(_fmt_percent)
     weekly_display["Target Completion"] = weekly_display["Target Completion"].map(_fmt_percent)
     st.dataframe(
@@ -623,6 +636,8 @@ else:
                 "Month Cumulative Sales",
                 "Previous Year Cumulative",
                 "Cumulative YoY",
+                "Previous Year Full Month Sales",
+                "Percent of Previous Year Full Month",
                 "Time Progress",
                 "Target Completion",
             ]
@@ -633,6 +648,8 @@ else:
                 "Month Cumulative Sales": "本月累计销售额",
                 "Previous Year Cumulative": "去年同月同期累计",
                 "Cumulative YoY": "当前累计同比",
+                "Previous Year Full Month Sales": "去年全月销售额",
+                "Percent of Previous Year Full Month": "去年全月完成进度",
                 "Time Progress": "当前时间进度",
                 "Target Completion": "目标完成率",
             }
