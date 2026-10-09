@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.auth import require_login
-from app.credit_context import scoped_credit_kpis, scoped_product_group_credits
+from app.credit_context import scoped_credit_kpis
 from app.data import apply_date_basis
 from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_prompt, render_data_source_sidebar
 from app.product_range_metrics import (
@@ -68,7 +68,8 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
     display = df.copy()
     money_cols = [
         "本月销售额",
-        "去年同期销售额",
+        "去年同月",
+        "去年全月",
         "同比增长额",
         "上月同期销售额",
         "本年累计销售额",
@@ -76,11 +77,9 @@ def _display_table(df: pd.DataFrame) -> pd.DataFrame:
         "本月目标",
         "Annual Target",
         "距离目标差额",
-        "Credit",
-        "Net Sales",
     ]
     signed_percent_cols = ["同比增长率"]
-    plain_percent_cols = ["环比增长率", "年累计同比"]
+    plain_percent_cols = ["环比增长率", "年累计同比", "LY Ach"]
     credit_percent_cols = ["Credit Rate"]
     for col in money_cols:
         if col in display.columns:
@@ -197,41 +196,6 @@ def _delta_text_style(value: float | None) -> str:
     return "color:#166534;" if float(value) >= 0 else "color:#b91c1c;"
 
 
-def _total_sales_between(data: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp, product_range: str | None) -> float:
-    if data.empty:
-        return 0.0
-    work = data
-    if product_range and product_range != "全部":
-        range_values = work[RANGE_COLUMN].fillna("未分类").astype(str)
-        work = work[range_values.eq(product_range)]
-    dates = pd.to_datetime(work["Performance Date"], errors="coerce").dt.normalize()
-    mask = dates.between(start.normalize(), end.normalize(), inclusive="both")
-    return float(pd.to_numeric(work.loc[mask, "Sales Amount"], errors="coerce").fillna(0).sum())
-
-
-def _prior_full_month_from_targets(amount_targets: pd.DataFrame | None, ctx, product_range: str | None) -> float | None:
-    if amount_targets is None or amount_targets.empty or "Previous Year Actual" not in amount_targets.columns:
-        return None
-    required = {"Year", "Month", RANGE_COLUMN}
-    if not required.issubset(amount_targets.columns):
-        return None
-    rows = amount_targets[
-        amount_targets["Year"].astype("Int64").eq(int(ctx.year))
-        & amount_targets["Month"].astype("Int64").eq(int(ctx.month))
-    ].copy()
-    if rows.empty:
-        return None
-    if product_range and product_range != "全部":
-        rows = rows[rows[RANGE_COLUMN].astype(str).eq(str(product_range))]
-    else:
-        company_rows = rows[rows[RANGE_COLUMN].astype(str).eq("公司整体")]
-        rows = company_rows if not company_rows.empty else rows[~rows[RANGE_COLUMN].astype(str).eq("公司整体")]
-    values = pd.to_numeric(rows["Previous Year Actual"], errors="coerce").dropna()
-    if values.empty:
-        return None
-    return float(values.sum())
-
-
 def _monthly_target_detail(amount_targets: pd.DataFrame | None, table: pd.DataFrame, ctx, product_range: str | None) -> pd.DataFrame:
     columns = ["Product Group", "Target", "Included?", "Reason"]
     if amount_targets is None or amount_targets.empty:
@@ -276,13 +240,11 @@ def _render_total_summary(
     product_range: str | None,
 ) -> None:
     current_sales = float(pd.to_numeric(table["本月销售额"], errors="coerce").fillna(0).sum())
-    previous_sales = float(pd.to_numeric(table["去年同期销售额"], errors="coerce").fillna(0).sum())
-    prior_full_start = pd.Timestamp(year=ctx.year - 1, month=ctx.month, day=1)
-    prior_full_end = prior_full_start + pd.offsets.MonthEnd(0)
-    prior_full_sales = _prior_full_month_from_targets(amount_targets, ctx, product_range)
-    if prior_full_sales is None:
-        prior_full_sales = _total_sales_between(filtered_data, prior_full_start, prior_full_end, product_range)
-    prior_full_gap = None if prior_full_sales == 0 else current_sales - prior_full_sales
+    previous_sales = float(pd.to_numeric(table["去年同月"], errors="coerce").fillna(0).sum())
+    prior_full_values = pd.to_numeric(table["去年全月"], errors="coerce").dropna()
+    prior_full_sales = None if prior_full_values.empty else float(prior_full_values.sum())
+    prior_full_gap = None if not prior_full_sales else current_sales - prior_full_sales
+    ly_achievement = None if not prior_full_sales else current_sales / prior_full_sales
     target_detail = _monthly_target_detail(amount_targets, table, ctx, product_range)
     targets = pd.to_numeric(target_detail["Target"], errors="coerce").dropna() if not target_detail.empty else pd.Series(dtype="float64")
     if targets.empty:
@@ -295,10 +257,12 @@ def _render_total_summary(
     completion_style = _tone_style(_metric_tone(completion, "completion"))
     gap_style = _tone_style(_metric_tone(gap, "gap"))
     yoy_style = _tone_style(_metric_tone(yoy, "yoy"))
+    ly_achievement_style = _tone_style(_metric_tone(ly_achievement, "completion"))
     target_text = _fmt_money(monthly_target)
     completion_text = "未配置" if completion is None else percent(completion)
     gap_text = _fmt_signed_money(gap)
     yoy_text = _fmt_percent(yoy)
+    ly_achievement_text = "—" if ly_achievement is None else percent(ly_achievement)
     yoy_title = ' title="去年同期销售为0，无法计算同比。"' if yoy is None else ""
     prior_full_gap_text = "—" if prior_full_gap is None else f"距去年全月 {_fmt_signed_money(prior_full_gap)}"
     prior_full_title = ' title="去年全月销售为0，无法比较差额。"' if prior_full_gap is None else ""
@@ -312,6 +276,7 @@ def _render_total_summary(
                 <div><span>本月销售</span><strong>{_fmt_money(current_sales)}</strong></div>
                 <div><span>去年同期</span><strong>{_fmt_money(previous_sales)}</strong></div>
                 <div><span>去年全月</span><strong>{_fmt_money(prior_full_sales)}</strong><small{prior_full_title} style="{prior_full_gap_style}">{prior_full_gap_text}</small></div>
+                <div><span>LY Ach</span><strong class="xf-total-pill" style="{ly_achievement_style}">{ly_achievement_text}</strong></div>
                 <div><span>本月目标</span><strong>{target_text}</strong></div>
                 <div><span>目标完成率</span><strong class="xf-total-pill" style="{completion_style}">{completion_text}</strong></div>
                 <div><span>距离目标</span><strong class="xf-total-pill" style="{gap_style}">{gap_text}</strong></div>
@@ -447,7 +412,7 @@ st.markdown(
     }
     .xf-total-metrics {
         display: grid;
-        grid-template-columns: repeat(7, minmax(100px, 1fr));
+        grid-template-columns: repeat(8, minmax(100px, 1fr));
         gap: 10px;
         align-items: stretch;
     }
@@ -530,7 +495,9 @@ table = overview.rename(
     columns={
         RANGE_COLUMN: "产品系列",
         "Current Month Sales": "本月销售额",
-        "Previous Year Same Period": "去年同期销售额",
+        "Previous Year Same Period": "去年同月",
+        "Previous Year Full Month Sales": "去年全月",
+        "LY Achievement": "LY Ach",
         "YoY Change": "同比增长额",
         "YoY Rate": "同比增长率",
         "Previous Month Same Period": "上月同期销售额",
@@ -559,21 +526,6 @@ else:
     credit_cols[2].metric("Net Sales / 调整后销售额", money(float(credit_kpis.get("Net Sales") or 0.0)))
     credit_cols[3].metric("Credit Rate / 退款率", _fmt_credit_rate(credit_kpis.get("Credit Rate")))
 
-    group_credits = scoped_product_group_credits(credit_scope)
-    if not group_credits.empty:
-        group_credit_columns = ["Product Group", "Credit", "Net Sales", "Credit Rate"]
-        table = table.merge(
-            group_credits[[column for column in group_credit_columns if column in group_credits.columns]].rename(columns={"Product Group": "产品系列"}),
-            on="产品系列",
-            how="left",
-        )
-    for column in ["Credit", "Net Sales"]:
-        if column not in table.columns:
-            table[column] = 0.0 if column == "Credit" else table["本月销售额"]
-        table[column] = pd.to_numeric(table[column], errors="coerce").fillna(0 if column == "Credit" else table["本月销售额"])
-    if "Credit Rate" not in table.columns:
-        table["Credit Rate"] = None
-
     _render_total_summary(table, comparison_data, amount_targets, ctx, selected_range)
 
     section_header("精简系列经营总览表")
@@ -587,14 +539,14 @@ else:
         "当前状态",
         "产品系列",
         "本月销售额",
-        "Credit",
-        "Net Sales",
-        "Credit Rate",
+        "去年同月",
+        "同比增长率",
+        "去年全月",
+        "LY Ach",
         "本月目标",
         "目标完成率",
-        "同比增长率",
-        "环比增长率",
         "距离目标差额",
+        "环比增长率",
         "年累计同比",
     ]
     st.dataframe(
@@ -713,7 +665,9 @@ if "table" in locals() and not table.empty:
             "产品系列",
             "当前状态",
             "本月销售额",
-            "去年同期销售额",
+            "去年同月",
+            "去年全月",
+            "LY Ach",
             "上月同期销售额",
             "本年累计销售额",
             "去年同期累计销售额",

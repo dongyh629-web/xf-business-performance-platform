@@ -162,6 +162,11 @@ def build_range_overview(df: pd.DataFrame, amount_targets: pd.DataFrame | None, 
 
     current = _range_series(work, ctx.month_start, ctx.month_end).rename("Current Month Sales")
     previous_year = _range_series(work, ctx.previous_year_start, ctx.previous_year_end).rename("Previous Year Same Period")
+    previous_year_full_month = _range_series(
+        work,
+        ctx.previous_year_start,
+        ctx.previous_year_start + pd.offsets.MonthEnd(0),
+    ).rename("Previous Year Full Month Sales")
     previous_month = _range_series(work, ctx.previous_month_start, ctx.previous_month_end).rename("Previous Month Same Period")
     ytd = _range_series(work, pd.Timestamp(year=ctx.year, month=1, day=1), ctx.month_end).rename("YTD Sales")
     previous_ytd = _range_series(
@@ -169,12 +174,26 @@ def build_range_overview(df: pd.DataFrame, amount_targets: pd.DataFrame | None, 
         pd.Timestamp(year=ctx.year - 1, month=1, day=1),
         pd.Timestamp(year=ctx.year - 1, month=ctx.month_end.month, day=ctx.month_end.day),
     ).rename("Previous YTD Sales")
-    table = pd.concat([current, previous_year, previous_month, ytd, previous_ytd], axis=1).fillna(0).reset_index()
+    table = pd.concat([current, previous_year, previous_year_full_month, previous_month, ytd, previous_ytd], axis=1).reset_index()
+    additive_columns = [
+        "Current Month Sales",
+        "Previous Year Same Period",
+        "Previous Month Same Period",
+        "YTD Sales",
+        "Previous YTD Sales",
+    ]
+    table[additive_columns] = table[additive_columns].fillna(0)
     monthly_targets = _target_table(amount_targets, ctx.year, ctx.month)
     annual_targets = _annual_target_table(amount_targets, ctx.year)
     table = table.merge(monthly_targets, on=RANGE_COLUMN, how="left").merge(annual_targets, on=RANGE_COLUMN, how="left")
     table["YoY Change"] = table["Current Month Sales"] - table["Previous Year Same Period"]
     table["YoY Rate"] = table.apply(lambda row: safe_ratio(row["YoY Change"], row["Previous Year Same Period"]), axis=1)
+    table["LY Achievement"] = table.apply(
+        lambda row: safe_ratio(row["Current Month Sales"], row["Previous Year Full Month Sales"])
+        if pd.notna(row.get("Previous Year Full Month Sales"))
+        else None,
+        axis=1,
+    )
     table["MoM Rate"] = table.apply(lambda row: safe_ratio(row["Current Month Sales"] - row["Previous Month Same Period"], row["Previous Month Same Period"]), axis=1)
     table["YTD YoY"] = table.apply(lambda row: safe_ratio(row["YTD Sales"] - row["Previous YTD Sales"], row["Previous YTD Sales"]), axis=1)
     table["Target Completion"] = table.apply(lambda row: safe_ratio(row["Current Month Sales"], row["Monthly Target"]) if pd.notna(row.get("Monthly Target")) else None, axis=1)
