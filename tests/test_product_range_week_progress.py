@@ -137,6 +137,36 @@ class ProductRangeWeekProgressTests(unittest.TestCase):
         self.assertTrue(result["Previous Year Full Month Sales"].isna().all())
         self.assertTrue(result["Percent of Previous Year Full Month"].isna().all())
 
+    def test_range_overview_schema_is_stable_without_prior_year_sales(self) -> None:
+        sales = pd.DataFrame(
+            {
+                "Performance Date": pd.to_datetime(["2026-10-09"]),
+                "Sales Amount": [100.0],
+                "Product Group": ["Range A"],
+            }
+        )
+
+        overview, _ctx = build_range_overview(sales, None, 2026, 10)
+
+        self.assertIn("Previous Year Full Month Sales", overview.columns)
+        self.assertIn("LY Achievement", overview.columns)
+        self.assertTrue(overview["Previous Year Full Month Sales"].isna().all())
+        self.assertTrue(overview["LY Achievement"].isna().all())
+
+    def test_range_overview_schema_is_stable_when_switching_periods(self) -> None:
+        sales = pd.DataFrame(
+            {
+                "Performance Date": pd.to_datetime(["2025-09-15", "2025-10-15", "2026-09-15", "2026-10-09"]),
+                "Sales Amount": [40.0, 50.0, 80.0, 100.0],
+                "Product Group": ["Range A"] * 4,
+            }
+        )
+
+        for year, month in [(2026, 10), (2026, 9), (2025, 10)]:
+            overview, _ctx = build_range_overview(sales, None, year, month)
+            self.assertIn("Previous Year Full Month Sales", overview.columns)
+            self.assertIn("LY Achievement", overview.columns)
+
 
 if __name__ == "__main__":
     unittest.main()

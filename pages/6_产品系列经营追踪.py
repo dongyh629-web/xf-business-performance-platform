@@ -12,6 +12,7 @@ from app.google_drive import ensure_drive_data_loaded, render_drive_data_load_pr
 from app.product_groups import normalize_product_group_copy, unmatched_product_groups
 from app.product_range_metrics import (
     RANGE_COLUMN,
+    RANGE_OVERVIEW_SCHEMA_VERSION,
     build_monthly_trend,
     build_range_overview,
     build_week_progress,
@@ -354,7 +355,13 @@ def _current_month_sales_scope(data: pd.DataFrame, ctx, product_range: str | Non
 
 
 @st.cache_data(show_spinner=False)
-def _cached_range_overview(data: pd.DataFrame, targets: pd.DataFrame | None, year: int, month: int):
+def _cached_range_overview(
+    data: pd.DataFrame,
+    targets: pd.DataFrame | None,
+    year: int,
+    month: int,
+    schema_version: str,
+):
     return build_range_overview(data, targets, year, month)
 
 
@@ -489,7 +496,13 @@ selected_year = filter_cols[0].selectbox("年度", years, index=years.index(defa
 selected_month = filter_cols[1].selectbox("月份", list(range(1, 13)), index=default_month - 1, format_func=lambda value: f"{value}月")
 
 amount_targets = st.session_state.get("target_amount_data")
-overview, ctx = _cached_range_overview(comparison_data, amount_targets, selected_year, selected_month)
+overview, ctx = _cached_range_overview(
+    comparison_data,
+    amount_targets,
+    selected_year,
+    selected_month,
+    RANGE_OVERVIEW_SCHEMA_VERSION,
+)
 range_options = _range_label_options(filtered)
 selected_range = filter_cols[2].selectbox("产品系列", range_options)
 

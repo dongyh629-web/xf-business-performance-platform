@@ -8,6 +8,7 @@ from app.product_groups import normalize_product_group_copy
 
 
 RANGE_COLUMN = "Product Group"
+RANGE_OVERVIEW_SCHEMA_VERSION = "range_overview_v2_prior_full_month"
 
 
 @dataclass(frozen=True)
